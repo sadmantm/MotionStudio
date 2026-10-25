@@ -547,11 +547,13 @@
           </div>
         </div>
         <div class="form-group">
-          <label>Workers por cena</label>
-          <select id="exportWorkers" class="prop-input full">
-            <option value="1">1 — Lento / Pouca RAM</option>
-            <option value="2" selected>2 — Balanceado</option>
-            <option value="4">4 — Rápido / Mais RAM</option>
+          <label for="exportWorkers">Renderização em paralelo</label>
+          <select id="exportWorkers" class="prop-input full" title="Trechos do vídeo renderizados ao mesmo tempo e emendados sem recodificar">
+            <option value="0" selected>Automático — usa os núcleos e a RAM livres</option>
+            <option value="1">1 trecho — pouca RAM</option>
+            <option value="2">2 trechos</option>
+            <option value="3">3 trechos</option>
+            <option value="4">4 trechos — mais RAM</option>
           </select>
         </div>
         <div id="exportScenesSummary" class="export-summary"></div>

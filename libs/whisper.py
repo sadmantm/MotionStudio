@@ -334,6 +334,10 @@ def _load_model():
             traceback.print_exc()
             _print(f"[Whisper] Falha em {dev}: {e}")
             if dev == "cuda":
+                # Python do sistema (não o ambiente do app) não recebe as libs CUDA na instalação automática
+                if re.search(r"cublas|cudnn", str(e), re.I):
+                    _print(f'[Whisper] Faltam as bibliotecas CUDA. Rode: "{sys.executable}" -m pip install '
+                           'nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"')
                 _print("[Whisper] Tentando novamente em CPU…")
     else:
         _control("FATAL", {"code": "load_failed", "error": f"{type(last_err).__name__}: {last_err}"})

@@ -5,12 +5,14 @@
 //    1. transcreve o trecho usado do clip (tempo de cada fala)
 //    2. /api/ai/scenes/plan divide em cenas nas pausas e fixa UM guia de estilo
 //       (paleta, fontes e :root idênticos em todas as cenas)
-//    3. gera cada cena em /api/ai/generate com a duração exata do trecho
+//    3. gera as cenas EM ORDEM em /api/ai/generate com a duração exata do trecho:
+//       a 1ª (âncora) completa e detalhada; cada seguinte recebe o HTML da
+//       anterior e só edita o que muda (mesmo <head>/estilo, menos tokens,
+//       e começa do quadro onde a anterior terminou)
 //    4. coloca cada clipe na timeline alinhado ao trecho do áudio, assim que fica pronto
 
 (() => {
   const PREFS_KEY   = 'ms.aiScenesPrefs';
-  const CONCURRENCY = 2;
 
   const STYLE_PRESETS = [
     ['Minimalista escuro', 'Minimalista e elegante: fundo quase preto, um único acento vibrante, muito espaço vazio, tipografia sans grotesca grande, linhas finas e animações suaves com easing expo.'],
@@ -133,7 +135,7 @@
 
         <div class="modal-body sc-body">
           <section class="sc-config">
-            <p class="sc-lead">A IA transcreve o áudio, divide em cenas nas pausas da fala e gera um clipe para cada trecho, já posicionado na timeline em cima do áudio.</p>
+            <p class="sc-lead">A IA transcreve o áudio, divide em cenas nas pausas da fala e gera um clipe para cada trecho, já posicionado na timeline em cima do áudio. A 1ª cena define o visual; cada cena seguinte parte da anterior, para o estilo e as transições ficarem contínuos.</p>
 
             <div class="form-group">
               <label>Estilo visual</label>
@@ -387,7 +389,7 @@
       renderStyle(job.style);
       renderScenes();
 
-      // 3. Cenas, CONCURRENCY por vez; cada uma entra na timeline ao terminar
+      // 3. Cenas em ordem, cada uma a partir da anterior; entram na timeline ao terminar
       await generatePending(job);
     } catch (err) {
       if (err.name === 'AbortError' || err.code === 'aborted') {
@@ -405,27 +407,35 @@
     }
   }
 
-  async function generatePending(job, only = null) {
+  async function generatePending(job) {
     setStep('generate', 'active');
-    const queue = job.scenes.filter(s => (only == null ? s.status === 'pending' : s.index === only));
     updateProgress(job);
-    // Bateu limite de uso: só o 1º worker continua (uma geração por vez)
-    const worker = async (_, slot) => {
-      while (queue.length && job.running && !(slot > 0 && job.throttled)) {
-        const scene = queue.shift();
-        await generateScene(job, scene);
-        updateProgress(job);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+    // Uma por vez e em ordem: cada cena precisa do HTML pronto da anterior
+    for (const scene of job.scenes) {
+      if (!job.running) return;
+      if (scene.status !== 'pending') continue;   // pronta, ou falhou por falta de cota
+      await generateScene(job, scene);
+      updateProgress(job);
+    }
     if (!job.running) return;
     const failed = job.scenes.filter(s => s.status === 'error').length;
     setStep('generate', failed ? 'error' : 'done');
   }
 
+  /** Cena pronta mais próxima antes desta: a referência que ela vai editar */
+  function referenceFor(job, scene) {
+    for (let i = scene.index - 1; i >= 0; i--) {
+      const s = job.scenes[i];
+      if (s.status === 'done' && s.html) return s;
+    }
+    return null;
+  }
+
   async function generateScene(job, scene) {
+    const ref = referenceFor(job, scene);
+    const label = ref ? `a partir da cena ${ref.index + 1}` : (job.scenes.length > 1 ? 'cena-âncora' : '');
     scene.status = 'running';
-    scene.message = 'Gerando…';
+    scene.message = label ? `Gerando (${label})…` : 'Gerando…';
     renderScene(scene);
     try {
       const result = await streamNdjson('/api/ai/generate', {
@@ -445,13 +455,18 @@
           outline: job.scenes.map(s => ({ start: s.start, end: s.end, title: s.title })),
           brief: job.form.brief,
           style: job.style,
+          previous: ref
+            ? { html: ref.html, index: ref.index, title: ref.title, duration: +(ref.end - ref.start).toFixed(3) }
+            : null,
         },
       }, {
         signal: job.controller.signal,
         onEvent: ev => {
-          if (ev.type === 'progress') { scene.message = `Gerando… ${ev.chars.toLocaleString('pt-BR')} caracteres`; renderScene(scene); }
-          if (ev.type === 'status' && (ev.rotatedFrom || ev.waiting)) {
-            job.throttled = true;
+          if (ev.type === 'progress') {
+            scene.message = `Gerando${label ? ` (${label})` : ''}… ${ev.chars.toLocaleString('pt-BR')} caracteres`;
+            renderScene(scene);
+          }
+          if (ev.type === 'status' && (ev.rotatedFrom || ev.waiting || ev.issues)) {
             scene.message = ev.message;
             renderScene(scene);
           }
@@ -459,8 +474,10 @@
       });
       addUsage(job, result.usage);
       await placeSerial(job, scene, result);
+      scene.html = result.html;
       scene.status = 'done';
-      scene.message = `pronta · ${result.model}${scene.sounds ? ` · ${scene.sounds} sons` : ''}`;
+      const edited = result.edit?.mode === 'patch' ? ` · ${result.edit.blocks} blocos editados` : '';
+      scene.message = `pronta · ${result.model}${edited}${scene.sounds ? ` · ${scene.sounds} sons` : ''}`;
     } catch (err) {
       if (err.name === 'AbortError' || err.code === 'aborted') {
         scene.status = 'pending';

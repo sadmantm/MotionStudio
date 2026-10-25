@@ -418,10 +418,13 @@ const PATCH_FORMAT = [
   '- Nada de explicações fora dos blocos.',
 ].join('\n');
 
+/** spec vazia: o HTML de referência no pedido já demonstra o contrato (cenas encadeadas) */
 function buildSystemInstruction({ spec, w, h, fps, mode = 'create' }) {
   return [
     'Você é um motion designer sênior e desenvolvedor front-end que escreve UM ÚNICO clipe de vídeo autocontido para o Motion Studio (formato "Video HTML").',
-    'Siga ESTRITAMENTE a especificação abaixo (contrato window.Motion, determinismo, layout).',
+    spec
+      ? 'Siga ESTRITAMENTE a especificação abaixo (contrato window.Motion, determinismo, layout).'
+      : 'Siga ESTRITAMENTE o contrato window.Motion do HTML de referência enviado no pedido (determinismo, layout).',
     '',
     'Regras obrigatórias:',
     `- Resolução do projeto: ${w}×${h} px. html e body devem ter exatamente width:${w}px; height:${h}px; margin:0; overflow:hidden. Nunca use vw/vh como base do layout.`,
@@ -439,10 +442,12 @@ function buildSystemInstruction({ spec, w, h, fps, mode = 'create' }) {
     mode === 'edit'
       ? PATCH_FORMAT
       : '- Responda SOMENTE com o documento HTML completo, começando em <!DOCTYPE html> e terminando em </html>. Sem explicações, sem markdown, sem cercas de código.',
-    '',
-    '===== ESPECIFICAÇÃO (templates/template-ia.html) =====',
-    spec,
-    '===== FIM DA ESPECIFICAÇÃO =====',
+    ...(spec ? [
+      '',
+      '===== ESPECIFICAÇÃO (templates/template-ia.html) =====',
+      spec,
+      '===== FIM DA ESPECIFICAÇÃO =====',
+    ] : []),
   ].join('\n');
 }
 
@@ -914,7 +919,10 @@ async function createRunner({ store, send, signal }) {
 // #region Cenas a partir de áudio
 // Fluxo: o editor transcreve o áudio → /api/ai/scenes/plan divide em cenas e
 // fixa UM guia de estilo (paleta, fontes, :root) → cada cena é gerada em
-// /api/ai/generate com body.scene, todas com o mesmo guia (coerência visual).
+// /api/ai/generate com body.scene, em ordem. A 1ª (âncora) sai completa com o
+// guia; as seguintes recebem o HTML da anterior (scene.previous) e respondem só
+// com blocos SEARCH/REPLACE sobre ele: herdam <head>, :root, fontes e helpers
+// sem reescrevê-los e continuam do quadro onde a anterior terminou.
 
 const SCENE_LENGTHS = {
   auto:   'entre 3 e 12 s, cortando onde a ideia/assunto da fala muda',
@@ -924,6 +932,7 @@ const SCENE_LENGTHS = {
   single: 'UMA ÚNICA cena cobrindo o áudio inteiro',
 };
 const MAX_SCENES = 40;
+const MAX_PREVIOUS_HTML = 300_000;
 
 const PLAN_SCHEMA = {
   type: 'OBJECT',
@@ -1219,6 +1228,8 @@ function normalizeSceneRequest(raw) {
   const duration = Number(raw.duration);
   if (!(duration > 0) || !raw.style) return null;
   const st = raw.style;
+  const prev = raw.previous;
+  const prevHtml = typeof prev?.html === 'string' ? prev.html : '';
   return {
     index: Math.max(0, Math.round(+raw.index || 0)),
     total: Math.max(1, Math.round(+raw.total || 1)),
@@ -1242,6 +1253,15 @@ function normalizeSceneRequest(raw) {
       css: /^:root \{[^<>{}]*\}$/.test(String(st.css || '').trim()) ? String(st.css).trim() : '',
       backgroundMode: st.backgroundMode === 'transparent' ? 'transparent' : 'full',
     },
+    // HTML da cena anterior (a nova cena é uma edição dele); grande demais = cena completa
+    previous: /<html[\s>]/i.test(prevHtml) && prevHtml.length <= MAX_PREVIOUS_HTML
+      ? {
+          html: prevHtml,
+          index: Math.max(0, Math.round(+prev.index || 0)),
+          title: String(prev.title || '').slice(0, 60),
+          duration: Math.max(0, +prev.duration || 0),
+        }
+      : null,
   };
 }
 
@@ -1281,8 +1301,56 @@ function buildScenePrompt({ scene, prompt, fps, sfx = false, sfxCatalog = '' }) 
     `Encadeamento: ${prev ? `vem depois de "${prev.title}"` : 'é a abertura do vídeo'}; ${next ? `antes de "${next.title}"` : 'é o encerramento'}. A saída desta cena e a entrada da próxima usam a mesma linguagem de movimento.`,
     'Não escreva a fala inteira na tela (legendas são feitas à parte): destaque só palavras-chave, números e ideias.',
     sfx ? sfxRules('create', sfxCatalog) : '',
+    scene.total > 1 ? ANCHOR_RULES : '',
     prompt ? `Pedido adicional: ${prompt}` : '',
     `Inclua <title>${scene.title}</title>.`,
+  ].filter(Boolean).join('\n');
+}
+
+// A âncora vira o ponto de partida das próximas: código organizado = blocos menores
+const ANCHOR_RULES = [
+  'CENA-ÂNCORA: as próximas cenas do vídeo serão criadas EDITANDO este HTML. Capriche nos detalhes e organize o código para ser reaproveitado:',
+  '- <head> com o link das fontes e o :root; CSS base de componentes reutilizáveis (títulos, destaques, cards, grafismos recorrentes) separado do CSS específico desta cena.',
+  '- Helpers (easing, interpolação, PRNG) e o contrato window.Motion separados do conteúdo; o DOM desta cena num bloco próprio e a timeline desta cena numa função própria chamada por seek(t).',
+].join('\n');
+
+/**
+ * Cena 2+ : o HTML da anterior vem primeiro (contexto longo antes da
+ * instrução) e a resposta são blocos SEARCH/REPLACE sobre ele. Sem guia de
+ * estilo nem especificação: a referência já carrega os dois.
+ */
+function buildSceneContinuePrompt({ scene, previousHtml, prompt, fps, sfx = false, sfxCatalog = '' }) {
+  const D = scene.duration;
+  const prev = scene.previous;
+  const next = scene.outline[scene.index + 1];
+  return [
+    `HTML da cena ${prev.index + 1} ("${prev.title}", ${fmtSec(prev.duration)} s) — REFERÊNCIA do vídeo:`,
+    previousHtml,
+    '',
+    'Roteiro completo:',
+    scene.outline.map((o, i) => `${i + 1}. [${fmtSec(o.start)}–${fmtSec(o.end)}] ${o.title}`).join('\n'),
+    scene.brief ? `Briefing do vídeo: ${scene.brief}` : '',
+    '',
+    `===== CENA ${scene.index + 1} DE ${scene.total}: "${scene.title}" =====`,
+    'Crie esta cena EDITANDO o HTML de referência com blocos SEARCH/REPLACE (formato nas instruções):',
+    '- Mantenha IDÊNTICOS o <head> (link das fontes e :root com as variáveis --ms-*), o CSS base, os helpers e o contrato window.Motion: são a identidade do vídeo.',
+    '- Troque o que é da cena: o DOM, o CSS específico e a timeline em seek(t). A composição é NOVA (não repita o layout da referência); paleta, fontes, grafismos e linguagem de movimento continuam os mesmos.',
+    `- Continuidade: esta cena começa onde a referência termina (t = ${fmtSec(prev.duration)} s nela). Veja o que sai, o que fica na tela e como está o fundo, e faça o quadro t = 0 desta cena partir desse estado — o corte entre os clipes deve parecer uma transição única, sem salto de fundo nem de elementos.`,
+    `- Duração EXATA: ${D} s → no config, durationInSeconds: ${D} e totalFrames: ${Math.round(D * fps)} (fps ${fps}).`,
+    `- Troque o <title> por <title>${scene.title}</title>.`,
+    '',
+    `O que mostrar: ${scene.visual || 'ilustre o que está sendo dito.'}`,
+    scene.onScreenText ? `Texto na tela: ${scene.onScreenText}` : '',
+    'Fala durante esta cena (segundos desde o início DESTA cena). Sincronize as entradas dos elementos com esses momentos:',
+    scene.speech.length
+      ? scene.speech.map(s => `[${fmtSec(s.start)}–${fmtSec(s.end)}] ${s.text}`).join('\n')
+      : '(sem fala nesta cena)',
+    next
+      ? `Depois desta vem "${next.title}": termine com a saída na linguagem de movimento do vídeo.`
+      : 'É o encerramento do vídeo: feche com um final claro.',
+    'Não escreva a fala inteira na tela (legendas são feitas à parte): destaque só palavras-chave, números e ideias.',
+    sfx ? `${sfxRules('edit', sfxCatalog)}\nReescreva Motion.sfx para ESTA cena (os sons da referência não valem aqui).` : '',
+    prompt ? `Pedido adicional: ${prompt}` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -1391,15 +1459,19 @@ function register(app, { root } = {}) {
       const verb = mode === 'edit' ? 'Editando' : 'Gerando';
       const generate = (startAt = runner.order[0]) => runner.run({ systemText, contents, verb, startAt });
 
-      // Edição: base64 embutido vira marcador (a IA não precisa ler imagens/fontes)
-      const { masked: maskedHtml, store: dataStore } = maskDataUris(currentHtml);
+      // Edição: base64 embutido vira marcador (a IA não precisa ler imagens/fontes).
+      // Cena encadeada: a base dos blocos é o HTML da cena anterior.
+      const chained = !!scene?.previous;
+      const { masked: maskedHtml, store: dataStore } = maskDataUris(chained ? scene.previous.html : currentHtml);
+      const patchMode = mode === 'edit' || chained;
 
-      const spec = loadSpec(root);
-      const systemText = buildSystemInstruction({ spec, w, h, fps, mode });
+      const systemText = buildSystemInstruction({ spec: chained ? '' : loadSpec(root), w, h, fps, mode: patchMode ? 'edit' : 'create' });
       const sfxCatalog = sfx ? await sfxLibrary.promptText() : '';
-      const userText = scene
-        ? buildScenePrompt({ scene, prompt, fps, sfx, sfxCatalog })
-        : buildUserPrompt({ mode, prompt, html: maskedHtml, name: reqName, w, h, fps, playhead, sfx, sfxCatalog });
+      const userText = chained
+        ? buildSceneContinuePrompt({ scene, previousHtml: maskedHtml, prompt, fps, sfx, sfxCatalog })
+        : scene
+          ? buildScenePrompt({ scene, prompt, fps, sfx, sfxCatalog })
+          : buildUserPrompt({ mode, prompt, html: maskedHtml, name: reqName, w, h, fps, playhead, sfx, sfxCatalog });
       const contents = [{ role: 'user', parts: [{ text: userText }] }];
 
       let result = await generate();
@@ -1408,18 +1480,19 @@ function register(app, { root } = {}) {
       let repaired = false;
       let edit = null;
 
-      if (mode === 'edit') {
+      if (patchMode) {
         ({ html, check, repaired, edit } = await resolveEdit({
           result, baseHtml: maskedHtml, contents, send,
           generate: () => generate(runner.model),
         }));
+        if (chained) html = fixSceneDuration(html, scene.duration, fps);
       } else {
         html = autoFix(extractHtml(result.text));
         if (scene) html = fixSceneDuration(html, scene.duration, fps);
         check = validateClip(html);
       }
 
-      if (mode !== 'edit' && check.issues.length) {
+      if (!patchMode && check.issues.length) {
         repaired = true;
         send({ type: 'status', message: `Corrigindo ${check.issues.length} problema(s) do clipe…`, issues: check.issues });
         const truncated = result.finishReason === 'MAX_TOKENS';
@@ -1448,7 +1521,7 @@ function register(app, { root } = {}) {
         throw new AiError(`O clipe gerado não segue o formato do Motion Studio: ${check.fatal.join('; ')}. Tente novamente.`, 422, 'invalid_clip');
       }
 
-      if (mode === 'edit') html = unmaskDataUris(html, dataStore);
+      if (patchMode) html = unmaskDataUris(html, dataStore);
 
       const name = ((mode === 'edit' || scene) && reqName) ? reqName : (cleanName(extractTitle(html)) || reqName || nameFromPrompt(prompt));
       finish({
@@ -1590,4 +1663,4 @@ function register(app, { root } = {}) {
 }
 // #endregion
 
-module.exports = { register, _internal: { extractHtml, validateClip, extractDurationSec, extractTitle, compareModels, pickDefaultModel, loadSpec, rotationOrder, classifyError, parseRetryInfo, normalizePlanScenes, normalizeSceneRequest, buildScenePrompt, fixSceneDuration, parseJsonLoose } };
+module.exports = { register, _internal: { extractHtml, validateClip, extractDurationSec, extractTitle, compareModels, pickDefaultModel, loadSpec, rotationOrder, classifyError, parseRetryInfo, normalizePlanScenes, normalizeSceneRequest, buildScenePrompt, buildSceneContinuePrompt, buildSystemInstruction, fixSceneDuration, parseJsonLoose } };

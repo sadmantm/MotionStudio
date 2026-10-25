@@ -2638,6 +2638,14 @@ body.is-resizing-panel iframe {
   border-radius: var(--radius-xs);
   background: radial-gradient(120% 90% at 50% 40%, #2a2a3a 0%, #0e0e14 75%);
 }
+.tx-tmpl-img { position: absolute; left: 0; display: block; max-width: none; object-fit: fill; }
+.tx-tmpl-img:not([src]), .tx-tmpl-thumb.is-live .tx-tmpl-img { visibility: hidden; }
+.tx-tmpl-thumb.is-loading::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,.06) 50%, transparent 70%) 0 0 / 200% 100%;
+  animation: txThumbShimmer 1.2s linear infinite;
+}
+@keyframes txThumbShimmer { to { background-position: -200% 0; } }
 .tx-tmpl-name { font-size: 10px; font-weight: 600; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tx-tmpl-tag { font-size: 9px; color: var(--accent); }
 .tx-style-row { display: grid; grid-template-columns: 70px auto auto minmax(120px, 1fr) 60px; gap: 10px; align-items: end; }

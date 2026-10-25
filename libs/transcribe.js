@@ -14,11 +14,13 @@ const WHISPER_READY_TIMEOUT = 60 * 60 * 1000;
 const TX_SAMPLE_TEXT = 'Sua legenda animada fica assim';
 const TX_SAMPLE_DUR  = 2.4;
 const TX_PREFS_KEY   = 'ms.txCaptionPrefs';
+const TX_THUMBS_KEY  = 'ms.txThumbs';
+const TX_PREVIEW_FPS = 30;   // a prévia não precisa de 60 seeks/s
 
 const _tx = {
   tmplId:    null,
   overrides: {},          // { fontSize, color, highlightColor }
-  hover:     null,        // { iframe, dur, clock }
+  hover:     null,        // { iframe, clock } — único iframe vivo da grade
   raf:       null,
   stageClock: 0,
   resKey:    '',
@@ -74,6 +76,46 @@ function _txMakeFrame(res, w, h) {
   return iframe;
 }
 
+/**
+ * Miniaturas da grade: quadros WebP do Chromium do servidor (o mesmo da
+ * filmstrip), em cache no localStorage pelo hash do HTML. Antes cada card era
+ * um iframe vivo de 1080×1920 carregando fontes — com 14 templates o modal
+ * abria 15 documentos completos e travava o editor.
+ */
+function _txHash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36);
+}
+
+function _txThumbCache() {
+  try { return JSON.parse(localStorage.getItem(TX_THUMBS_KEY) || '{}') || {}; } catch (_) { return {}; }
+}
+
+/** items: [{ key, html, onReady(url), onFail() }] — guarda no cache só as miniaturas atuais */
+async function _txFetchThumbs(items, res) {
+  const cache = _txThumbCache();
+  // Um pedido por vez: o servidor renderiza numa página só, em fila
+  for (const it of items.filter(it => !cache[it.key])) {
+    try {
+      const resp = await fetch('/api/thumbs/html', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: it.html, w: res.w, h: res.h, times: [TX_SAMPLE_DUR * 0.75], height: 240 }),
+      });
+      const url = resp.ok ? (await resp.json()).frames?.[0]?.url : null;
+      if (!url) throw new Error(`HTTP ${resp.status}`);
+      cache[it.key] = url;
+      it.onReady(url);
+    } catch (_) {
+      it.onFail();
+    }
+  }
+  const keep = {};
+  items.forEach(it => { if (cache[it.key]) keep[it.key] = cache[it.key]; });
+  try { localStorage.setItem(TX_THUMBS_KEY, JSON.stringify(keep)); } catch (_) { /* sem espaço */ }
+}
+
 function _txBuildGrid() {
   const grid = document.getElementById('txTmplGrid');
   const res  = window.__appState?.project?.res || { w: 1080, h: 1920 };
@@ -82,6 +124,9 @@ function _txBuildGrid() {
   _tx.resKey = resKey;
 
   const W = 104, H = 92;
+  const scale = W / res.w;
+  const cache = _txThumbCache();
+  const pending = [];
   grid.innerHTML = '';
   _txTemplates().forEach(t => {
     const card = document.createElement('button');
@@ -94,11 +139,33 @@ function _txBuildGrid() {
     thumb.className = 'tx-tmpl-thumb';
     thumb.style.width  = W + 'px';
     thumb.style.height = H + 'px';
-    const iframe = _txMakeFrame(res, W, H);
-    // Quadro parado no fim da animação (texto inteiro visível)
-    iframe.addEventListener('load', () => _txSeek(iframe, TX_SAMPLE_DUR * 0.75));
-    iframe.srcdoc = window.__TextRegistry.buildHtml(t.id, _txSampleParams(t), res);
-    thumb.appendChild(iframe);
+
+    // Quadro parado no fim da animação (texto inteiro visível), centralizado como o iframe
+    const html = window.__TextRegistry.buildHtml(t.id, _txSampleParams(t), res);
+    const img = document.createElement('img');
+    img.className = 'tx-tmpl-img';
+    img.alt = '';
+    img.decoding = 'async';
+    img.style.cssText = `top:${Math.round((H - res.h * scale) / 2)}px;width:${W}px;height:${Math.round(res.h * scale)}px`;
+    const key = `${t.id}|${resKey}|${_txHash(html)}`;
+    if (cache[key]) {
+      img.src = cache[key];
+    } else {
+      thumb.classList.add('is-loading');
+      pending.push({
+        key, html,
+        onReady: url => { img.src = url; thumb.classList.remove('is-loading'); },
+        // Sem Chromium no servidor: o card mostra o quadro num iframe, como antes
+        onFail: () => {
+          thumb.classList.remove('is-loading');
+          const iframe = _txMakeFrame(res, W, H);
+          iframe.addEventListener('load', () => _txSeek(iframe, TX_SAMPLE_DUR * 0.75));
+          iframe.srcdoc = html;
+          img.replaceWith(iframe);
+        },
+      });
+    }
+    thumb.appendChild(img);
 
     const name = document.createElement('span');
     name.className = 'tx-tmpl-name';
@@ -113,13 +180,28 @@ function _txBuildGrid() {
     }
 
     card.addEventListener('click', () => _txSelect(t.id));
-    card.addEventListener('mouseenter', () => { _tx.hover = { iframe, clock: 0 }; });
-    card.addEventListener('mouseleave', () => {
-      _tx.hover = null;
-      _txSeek(iframe, TX_SAMPLE_DUR * 0.75);
+    // Animação no hover: um iframe criado na hora, por cima da miniatura, e descartado ao sair
+    card.addEventListener('mouseenter', () => {
+      _txStopHover();
+      const iframe = _txMakeFrame(res, W, H);
+      // Fundo transparente: a miniatura some só quando o quadro animado existe
+      iframe.addEventListener('load', () => thumb.classList.add('is-live'));
+      iframe.srcdoc = html;
+      thumb.appendChild(iframe);
+      _tx.hover = { iframe, thumb, clock: 0 };
     });
+    card.addEventListener('mouseleave', _txStopHover);
     grid.appendChild(card);
   });
+
+  if (pending.length) _txFetchThumbs(pending, res);
+}
+
+function _txStopHover() {
+  if (!_tx.hover) return;
+  _tx.hover.iframe.remove();
+  _tx.hover.thumb.classList.remove('is-live');
+  _tx.hover = null;
 }
 
 function _txSelect(tmplId) {
@@ -180,25 +262,27 @@ function _txRenderStage() {
     iframe.srcdoc = window.__TextRegistry.buildHtml(t.id, _txSampleParams(t, _txActiveOverrides()), res);
     stage.appendChild(iframe);
     _tx.stageClock = 0;
-  }, 60);
+  }, 180);   // arrastar o seletor de cor não recria o documento a cada evento
 }
 
-/** Um único loop de rAF: palco sempre animando + card sob o mouse */
+/** Um único loop de rAF a TX_PREVIEW_FPS: palco sempre animando + card sob o mouse */
 function _txAnimate() {
   cancelAnimationFrame(_tx.raf);
+  const stage = document.getElementById('txStage');
   let last = null;
   const tick = ts => {
-    const dt = last == null ? 0 : (ts - last) / 1000;
+    _tx.raf = requestAnimationFrame(tick);
+    if (last != null && ts - last < 1000 / TX_PREVIEW_FPS - 2) return;
+    const dt = last == null ? 0 : Math.min(0.25, (ts - last) / 1000);
     last = ts;
     // Palco: anima, segura o quadro final 0,8 s e repete
     _tx.stageClock = (_tx.stageClock + dt) % (TX_SAMPLE_DUR + 0.8);
-    const stageFrame = document.querySelector('#txStage iframe');
+    const stageFrame = stage?.querySelector('iframe');
     if (stageFrame) _txSeek(stageFrame, Math.min(_tx.stageClock, TX_SAMPLE_DUR));
     if (_tx.hover) {
       _tx.hover.clock = (_tx.hover.clock + dt) % (TX_SAMPLE_DUR + 0.5);
       _txSeek(_tx.hover.iframe, Math.min(_tx.hover.clock, TX_SAMPLE_DUR));
     }
-    _tx.raf = requestAnimationFrame(tick);
   };
   _tx.raf = requestAnimationFrame(tick);
 }
@@ -384,7 +468,11 @@ function openTranscribeModal(clipId) {
 function closeTranscribeModal() {
   document.getElementById('transcribeModal').style.display = 'none';
   cancelAnimationFrame(_tx.raf);
-  _tx.hover = null;
+  clearTimeout(_txStageTimer);
+  clearTimeout(_refreshWhisperStatus._t);
+  _txStopHover();
+  // O documento do palco não fica vivo com o modal fechado (open recria)
+  document.querySelector('#txStage iframe')?.remove();
 }
 
 async function _fetchWhisperStatus(retry = false) {

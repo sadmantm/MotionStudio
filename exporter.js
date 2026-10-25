@@ -277,7 +277,42 @@ function getProjectRoot() {
 const CPUS          = os.cpus().length;
 const CLEANUP_DELAY = 30_000;
 const VIDEO_ENCODER_KEY = process.env.HW_ENCODER || 'CPU_X264';
- 
+
+/**
+ * Renderização em paralelo: a timeline é dividida em trechos capturados ao
+ * mesmo tempo, cada um numa aba do Chromium (processo próprio no Windows/macOS)
+ * com o próprio ffmpeg, e emendados no fim sem recodificar. Com uma aba só, a
+ * captura é serial (pinta → codifica o quadro → ffmpeg) e a máquina fica ociosa.
+ * EXPORT_WORKERS=n fixa o máximo de trechos simultâneos.
+ */
+const MIN_CHUNK_SECONDS   = 3;                    // abrir uma aba custa ~1–3 s
+const WORKER_RAM_BYTES    = 700 * 1024 * 1024;    // aba + iframes + ffmpeg
+// Placas GeForce limitam as sessões NVENC simultâneas (3–8 conforme o driver)
+const NVENC_MAX_SESSIONS  = 3;
+const RENDER_WORKERS_MAX  = resolveMaxRenderWorkers();
+
+function resolveMaxRenderWorkers() {
+  const fixed = Math.floor(Number(process.env.EXPORT_WORKERS));
+  if (fixed >= 1) return Math.min(16, fixed);
+  // Linux: o WVC lança o Chromium com --single-process (abas no mesmo processo)
+  if (os.platform() === 'linux') return 1;
+  const byCpu = Math.max(1, Math.floor(CPUS / 2));
+  const byRam = Math.max(1, Math.floor(os.totalmem() / (2 * WORKER_RAM_BYTES)));
+  // Medido (12 threads + RTX 2070, 24 s em 1080×1920@30): 1 trecho em PNG
+  // (antes) → 405 s; JPEG com 3 trechos → 65 s; 6 trechos → 68 s.
+  // Acima de 3–4 as abas disputam o processo de GPU do Chromium e não ganham nada.
+  return Math.min(4, byCpu, byRam);
+}
+
+/** Quantos trechos este export usa: pedido do usuário, RAM livre agora, duração e encoder */
+function planRenderWorkers(totalFrames, fps, requested, encoderName) {
+  let n = requested >= 1 ? Math.min(requested, RENDER_WORKERS_MAX) : RENDER_WORKERS_MAX;
+  if (/nvenc/i.test(encoderName) && !process.env.EXPORT_WORKERS) n = Math.min(n, NVENC_MAX_SESSIONS);
+  n = Math.min(n, Math.max(1, Math.floor(os.freemem() / WORKER_RAM_BYTES)));
+  n = Math.min(n, Math.max(1, Math.floor(totalFrames / (fps * MIN_CHUNK_SECONDS))));
+  return Math.max(1, n);
+}
+
 /**
  * Bitrate de vídeo (kbps) proporcional à área × fps.
  * ~0.20 bit/pixel/frame ≈ 25 Mbps em 1080p60. Encoders de hardware
@@ -379,12 +414,18 @@ async function getWVC() {
       ? (resolveEncoder(process.env.HW_ENCODER) || process.env.HW_ENCODER)
       : await detectBestEncoder();
  
-    // Modo rápido (preview): volta para JPEG. Padrão: PNG lossless.
-    const fastMode = process.env.WVC_FAST === '1';
- 
+    // Quadro capturado: JPEG 100 por padrão. Codificar PNG de 1080×1920 custa
+    // 5–10× mais (no Chromium e no decode do ffmpeg) e não muda o resultado: o
+    // vídeo final é yuv420p (mesma subamostragem de cor do JPEG) e o erro do
+    // JPEG 100 (±1 nível) some sob a compressão do H.264.
+    // WVC_FRAME_FORMAT=png volta ao lossless; WVC_FAST=1 usa JPEG 90 (prévia).
+    const fastMode    = process.env.WVC_FAST === '1';
+    const frameFormat = process.env.WVC_FRAME_FORMAT === 'png' ? 'png' : 'jpeg';
+    const frameQuality = fastMode ? 90 : 100;
+
     console.log(`[WVC] Encoder selecionado: ${encoder}`);
-    console.log(`[WVC] Plataforma: ${os.platform()}, CPUs: ${CPUS}`);
-    console.log(`[WVC] Captura de frames: ${fastMode ? 'JPEG 90 (rápido)' : 'PNG lossless (qualidade)'}`);
+    console.log(`[WVC] Plataforma: ${os.platform()}, CPUs: ${CPUS}, trechos em paralelo: até ${RENDER_WORKERS_MAX}`);
+    console.log(`[WVC] Captura de frames: ${frameFormat === 'png' ? 'PNG lossless' : `JPEG ${frameQuality}`}`);
  
     const wvc = new WebVideoCreator();
  
@@ -397,39 +438,42 @@ async function getWVC() {
       browserUseAngle: false,
       compatibleRenderingMode: os.platform() === 'darwin',
  
+      // Um Chromium só (o WVC usa o mesmo userDataDir para todos), com uma
+      // aba por trecho renderizado em paralelo
       numBrowserMin: 1,
       numBrowserMax: 1,
       numPageMin:    1,
-      numPageMax:    1,
- 
-      // ── Qualidade da captura ──────────────────────────────────
-      // PNG = sem perda entre o Chromium e o ffmpeg. Só o H.264 final comprime.
-      frameFormat:  fastMode ? 'jpeg' : 'png',
-      frameQuality: fastMode ? 90 : 100,
- 
-      // Flags extras do Chromium para rasterização estável e nítida.
-      browserLaunchOptions: {
-        args: [
-          '--force-color-profile=srgb',
-          '--font-render-hinting=none',
-          '--disable-font-subpixel-positioning',
-          '--disable-lcd-text',
-          '--enable-gpu-rasterization',
-          '--enable-zero-copy',
-          '--ignore-gpu-blocklist',
-          '--disable-partial-raster',
-          // PCs sem GPU: o Chrome atual só cria WebGL por software (SwiftShader)
-          // com esta flag — sem ela, clipes 3D/WebGL saem em branco no export.
-          ...(process.env.WVC_SWIFTSHADER === '0' ? [] : ['--enable-unsafe-swiftshader']),
-        ],
-      },
- 
+      numPageMax:    RENDER_WORKERS_MAX,
+
+      frameFormat,
+      frameQuality,
+
       browserDisableDevShm: process.env.IN_DOCKER === '1',
       // App desktop: Chrome do export vem empacotado (sem download na 1ª exportação)
       ...(process.env.MS_CHROME_PATH ? { browserExecutablePath: process.env.MS_CHROME_PATH } : {}),
       debug:       process.env.WVC_DEBUG === '1',
       ffmpegDebug: process.env.WVC_DEBUG === '1',
     });
+
+    // Flags extras do Chromium. O WVC não tem chave de config para isso (a
+    // antiga "browserLaunchOptions" era ignorada): vão nas opções do pool, que
+    // só cria o navegador no primeiro export.
+    wvc.pool.browserOptions = {
+      ...wvc.pool.browserOptions,
+      args: [
+        '--force-color-profile=srgb',
+        '--disable-font-subpixel-positioning',
+        '--disable-lcd-text',
+        '--disable-partial-raster',
+        // Cada aba (trecho em paralelo) no próprio processo: o Chrome recente
+        // junta abas do mesmo site num renderer só. Repete RendererCodeIntegrity
+        // porque só o último --disable-features vale.
+        '--disable-features=RendererCodeIntegrity,ProcessPerSiteUpToMainFrameThreshold',
+        // PCs sem GPU: o Chrome atual só cria WebGL por software (SwiftShader)
+        // com esta flag — sem ela, clipes 3D/WebGL saem em branco no export.
+        ...(process.env.WVC_SWIFTSHADER === '0' ? [] : ['--enable-unsafe-swiftshader']),
+      ],
+    };
  
     return {
       wvc,
@@ -1222,69 +1266,95 @@ async function renderJob(jobId, clips, opts) {
     );
     if (!(totalDuration > 0)) throw new Error('Duração total inválida.');
  
-    // 2. UMA cena composta com todas as camadas, dirigida pelo relógio virtual do WVC.
-    const html = buildFullScene(clips, width, height, root, projectRes, fps);
- 
-    // 3. Publica a cena no servidor interno. Sem isto o Chromium recebe 404
-    //    e o vídeo sai preto.
-    sceneStore.set(`${jobId}_0`, html);
- 
-    const url        = `http://127.0.0.1:${port}/job/${jobId}/scene-0.html`;
-    const outputPath = path.join(tmpDir, `output.${format}`);
- 
-    // 4. Bitrate calibrado pela resolução/fps/encoder deste export.
+    // 2. Trechos renderizados em paralelo. Cada um é a mesma cena composta,
+    //    com o relógio deslocado para o início do trecho e só as camadas que
+    //    aparecem nele (a página não carrega o que não usa).
+    const totalFrames = Math.max(1, Math.floor(Math.round(totalDuration * 1000) / 1000 * fps + 1e-6));
+    const workers     = planRenderWorkers(totalFrames, fps, Number(opts.workersPerScene) || 0, encoderName);
+    const chunks = Array.from({ length: workers }, (_, k) => {
+      const firstFrame = Math.round(k * totalFrames / workers);
+      const endFrame   = Math.round((k + 1) * totalFrames / workers);
+      return { index: k, firstFrame, frames: endFrame - firstFrame, progress: 0 };
+    });
+
+    // 3. Bitrate calibrado pela resolução/fps/encoder deste export.
     const bitrateKbps = computeVideoBitrateKbps(width, height, fps, encoderName);
+    const outputPath  = path.join(tmpDir, `output.${format}`);
     console.log(
       `[Job ${jobId}] ${width}x${height}@${fps} · ${totalDuration.toFixed(2)}s · ` +
-      `encoder=${encoderName} · bitrate=${bitrateKbps}k`
+      `encoder=${encoderName} · bitrate=${bitrateKbps}k · ${workers} trecho(s) em paralelo`
     );
- 
-    const video = wvc.createSingleVideo({
-      url, width, height, fps,
-      duration:     Math.round(totalDuration * 1000),
-      outputPath,
-      showProgress: true,
-      // O padrão do WVC é 'prefer-hardware': sem decodificador de vídeo por
-      // hardware (PCs sem GPU, Chromium headless no macOS) o VideoDecoder recusa a
-      // configuração e o export trava esperando o 1º quadro. 'no-preference' usa
-      // hardware quando existe e software quando não. WVC_VIDEO_DECODER sobrescreve.
-      videoDecoderHardwareAcceleration: process.env.WVC_VIDEO_DECODER || 'no-preference',
 
-      // WVC_DEBUG=1: console da página do export + pré-processamento de vídeo no terminal
-      consoleLog:         process.env.WVC_DEBUG === '1',
-      videoPreprocessLog: process.env.WVC_DEBUG === '1',
-      startTime:    0,
-      timeout:      30 * 60 * 1000,
- 
-      videoBitrate: `${bitrateKbps}k`,
-      audioBitrate: '320k',
-      // yuv420p roda em qualquer player/telão. yuv444p preserva mais cor,
-      // mas muitos players de mídia não reproduzem.
-      pixelFormat:  'yuv420p',
-    });
- 
-    video.on('progress', (...args) => {
-      const pct = Number(args[0]);
-      if (!Number.isFinite(pct)) return;
+    const reportProgress = () => {
+      const pct = chunks.reduce((sum, c) => sum + c.progress, 0) / chunks.length;
       updateJob(jobId, {
         progress: Math.max(0, Math.min(99, Math.round(pct))),
-        message:  `Renderizando… ${Math.round(pct)}%`,
+        message:  workers > 1
+          ? `Renderizando ${workers} trechos em paralelo… ${Math.round(pct)}%`
+          : `Renderizando… ${Math.round(pct)}%`,
       });
+    };
+
+    const videos = chunks.map(chunk => {
+      const from = chunk.firstFrame / fps;
+      const to   = (chunk.firstFrame + chunk.frames) / fps;
+      // 4. Publica a cena no servidor interno. Sem isto o Chromium recebe 404
+      //    e o vídeo sai preto.
+      sceneStore.set(`${jobId}_${chunk.index}`, buildFullScene(clips, width, height, root, projectRes, fps, {
+        totalDuration, from, to,
+      }));
+      // Um trecho só: direto no arquivo final. Vários: MP4 em MPEG-TS (emenda
+      // sem recodificar e sem desalinhar B-frames), WebM em WebM.
+      chunk.outputPath = workers === 1
+        ? outputPath
+        : path.join(tmpDir, `chunk-${chunk.index}.${format === 'mp4' ? 'ts' : format}`);
+
+      const options = {
+        url: `http://127.0.0.1:${port}/job/${jobId}/scene-${chunk.index}.html`,
+        width, height, fps,
+        // +½ quadro: o WVC arredonda para baixo (floor(duração × fps))
+        duration:     (chunk.frames + 0.5) * 1000 / fps,
+        outputPath:   chunk.outputPath,
+        showProgress: workers === 1,
+        // O padrão do WVC é 'prefer-hardware': sem decodificador de vídeo por
+        // hardware (PCs sem GPU, Chromium headless no macOS) o VideoDecoder recusa a
+        // configuração e o export trava esperando o 1º quadro. 'no-preference' usa
+        // hardware quando existe e software quando não. WVC_VIDEO_DECODER sobrescreve.
+        videoDecoderHardwareAcceleration: process.env.WVC_VIDEO_DECODER || 'no-preference',
+
+        // WVC_DEBUG=1: console da página do export + pré-processamento de vídeo no terminal
+        consoleLog:         process.env.WVC_DEBUG === '1',
+        videoPreprocessLog: process.env.WVC_DEBUG === '1',
+        startTime:    0,
+        timeout:      30 * 60 * 1000,
+
+        videoBitrate: `${bitrateKbps}k`,
+        audioBitrate: '320k',
+        // yuv420p roda em qualquer player/telão. yuv444p preserva mais cor,
+        // mas muitos players de mídia não reproduzem.
+        pixelFormat:  'yuv420p',
+      };
+      return workers > 1 && format === 'mp4'
+        ? wvc.createChunkVideo({ ...options, autoremove: false })
+        : wvc.createSingleVideo(options);
     });
- 
-    // 5. Aguarda o WVC, com watchdog de inatividade (5 min sem progresso = travou).
+
+    // 5. Aguarda os trechos, com watchdog de inatividade (5 min sem progresso
+    //    em nenhum = travou). Um trecho com erro interrompe os outros.
     await new Promise((resolve, reject) => {
       let settled  = false;
       let watchdog = null;
+      let pending  = videos.length;
       const IDLE_MS = 5 * 60 * 1000;
- 
+
       const finish = (fn, arg) => {
         if (settled) return;
         settled = true;
         clearTimeout(watchdog);
+        if (fn === reject) videos.forEach(v => { try { v.abort?.(); } catch (_) {} });
         fn(arg);
       };
- 
+
       const arm = () => {
         clearTimeout(watchdog);
         watchdog = setTimeout(() => {
@@ -1295,18 +1365,31 @@ async function renderJob(jobId, clips, opts) {
         }, IDLE_MS);
       };
       arm();
- 
-      video.on('progress', arm);
- 
-      video.once('completed', result => {
-        console.log(`[Job ${jobId}] RTF: ${result?.rtf}, took: ${result?.takes}ms`);
-        finish(resolve);
+
+      videos.forEach((video, k) => {
+        video.on('progress', (...args) => {
+          const pct = Number(args[0]);
+          if (!Number.isFinite(pct)) return;
+          chunks[k].progress = pct;
+          reportProgress();
+          arm();
+        });
+        video.once('completed', result => {
+          console.log(`[Job ${jobId}] trecho ${k + 1}/${videos.length} · RTF: ${result?.rtf}, took: ${result?.takes}ms`);
+          chunks[k].progress = 100;
+          if (--pending === 0) finish(resolve);
+        });
+        video.once('error', err => finish(reject, err));
+        Promise.resolve(video.start()).catch(err => finish(reject, err));
       });
-      video.once('error', err => finish(reject, err));
- 
-      Promise.resolve(video.start()).catch(err => finish(reject, err));
     });
- 
+
+    if (workers > 1) {
+      updateJob(jobId, { progress: 99, message: 'Juntando os trechos…' });
+      await concatChunks(chunks.map(c => c.outputPath), outputPath, format);
+      chunks.forEach(c => fs.promises.unlink(c.outputPath).catch(() => {}));
+    }
+
     // 6. Áudio dos clipes de vídeo e de áudio (o WVC captura só imagem).
     //    Volume 0 = mudo (clip, track mutada ou fora do solo): fica fora da mixagem.
     const soundClips = clips.filter(c =>
@@ -1326,11 +1409,18 @@ async function renderJob(jobId, clips, opts) {
   }
 }
 
+/**
+ * timeOffset/windowEnd: trecho [início, fim) no export paralelo. Os atributos
+ * do <video> seguem o relógio do WVC, que recomeça do 0 em cada trecho;
+ * data-start fica no tempo global (o runtime da cena soma o deslocamento).
+ */
 function buildMediaLayerHtmlGlobal(
   clip,
   width,
   height,
-  projectRes
+  projectRes,
+  timeOffset = 0,
+  windowEnd = Infinity
 ) {
   const { wrapStyle } =
     htmlLayerTransform(
@@ -1386,6 +1476,15 @@ function buildMediaLayerHtmlGlobal(
 </div>`;
   }
 
+  // Vídeo que começou antes do trecho: startTime negativo no relógio do trecho,
+  // mesmo corte inicial (seekStart) do export inteiro. Avançar o seekStart
+  // mudaria o 1º quadro do arquivo cortado (o ffmpeg pega o quadro >= ao
+  // corte) e o vídeo sairia 1 quadro adiantado. O fim é cortado logo depois
+  // do trecho (+1 s de folga) para não pré-processar o que não aparece.
+  const shownUntil = Math.min(start + duration, windowEnd + 1);
+  const chunkStart = start - timeOffset;
+  const chunkEnd   = shownUntil - timeOffset;
+
   return `
 <div
   ${attributes}
@@ -1398,23 +1497,23 @@ function buildMediaLayerHtmlGlobal(
     preload="auto"
     playsinline
     startTime="${Math.round(
-      start * 1000
+      chunkStart * 1000
     )}"
     endTime="${Math.round(
-      (start + duration) * 1000
+      chunkEnd * 1000
     )}"
     seekStart="${Math.round(
       trimStart * 1000
     )}"
     seekEnd="${Math.round(
-      (trimStart + duration) * 1000
+      (trimStart + shownUntil - start) * 1000
     )}"
     style="width:100%;height:100%;object-fit:fill;display:block"
   ></video>
 </div>`;
 }
 
-function buildSceneRuntimeScript(totalDuration, fps) {
+function buildSceneRuntimeScript(totalDuration, fps, timeOffset = 0) {
   return `
 <script>
 (function () {
@@ -1422,6 +1521,8 @@ function buildSceneRuntimeScript(totalDuration, fps) {
 
   var TOTAL = ${JSON.stringify(totalDuration)};
   var FPS   = ${JSON.stringify(fps)};
+  // Export paralelo: o WVC conta quadros a partir do início deste trecho
+  var OFFSET = ${JSON.stringify(timeOffset)};
   // Modelos 3D/texturas/bibliotecas de CDN podem levar mais que fontes
   var READY_TIMEOUT_MS = 45000;
 
@@ -1435,7 +1536,40 @@ function buildSceneRuntimeScript(totalDuration, fps) {
   // Timers reais: o WVC virtualiza setTimeout/rAF da página e, com a captura
   // pausada esperando um iframe, um timeout virtual nunca dispararia.
   var realSetTimeout = window.____setTimeout || window.setTimeout;
+  var realClearTimeout = window.____clearTimeout || window.clearTimeout;
   function later(fn, ms) { return realSetTimeout.call(window, fn, ms); }
+
+  // O VideoCanvas do WVC espera 30 s por um quadro que o VideoDecoder às vezes
+  // nunca entrega (o último do trecho cortado) e então lança — o erro mata o
+  // loop de captura em silêncio e o export fica parado até o watchdog. Aqui o
+  // quadro que não chega em FRAME_WAIT_MS repete o último desenhado.
+  var FRAME_WAIT_MS = 5000;
+  var VideoCanvas = window.____VideoCanvas;
+  if (VideoCanvas && VideoCanvas.prototype._acquireFrame && !VideoCanvas.prototype.__msHoldLast) {
+    VideoCanvas.prototype.__msHoldLast = true;
+    VideoCanvas.prototype._acquireFrame = function (frameIndex) {
+      var self = this;
+      if (self.frames[frameIndex]) return Promise.resolve(self.frames[frameIndex]);
+      self._clearUnclosedFrames();
+      return new Promise(function (resolve) {
+        var timer = later(function () {
+          if (self.waitFrameIndex === frameIndex) {
+            self.waitFrameIndex = null;
+            self.waitFrameCallback = null;
+          }
+          // O próprio canvas sem displayWidth: drawImage recebe NaN e não desenha
+          var hold = self.canvas;
+          if (hold && !hold.close) hold.close = function () {};
+          resolve(hold);
+        }, FRAME_WAIT_MS);
+        self.waitFrameIndex = frameIndex;
+        self.waitFrameCallback = function () {
+          realClearTimeout.call(window, timer);
+          resolve(self.frames[frameIndex]);
+        };
+      });
+    };
+  }
 
   var layers = Array.prototype.slice.call(
     document.querySelectorAll('[data-ms-layer]')
@@ -1690,7 +1824,7 @@ function buildSceneRuntimeScript(totalDuration, fps) {
     });
 
   var ready = Promise.all(
-    [document.fonts ? document.fonts.ready : Promise.resolve(), prepare(0)]
+    [document.fonts ? document.fonts.ready : Promise.resolve(), prepare(OFFSET)]
       .concat(mediaReady)
   ).catch(function () {});
 
@@ -1722,7 +1856,7 @@ function buildSceneRuntimeScript(totalDuration, fps) {
     window.____captureFrame = function () {
       var self = this;
       var args = arguments;
-      var time = number(ctx.frameIndex, 0) / FPS;
+      var time = OFFSET + number(ctx.frameIndex, 0) / FPS;
       var pending = prepare(time);
       var capture = function () {
         renderAt(time);
@@ -1740,7 +1874,7 @@ function buildSceneRuntimeScript(totalDuration, fps) {
         var self = this;
         var args = arguments;
         ready.then(function () {
-          renderAt(0);
+          renderAt(OFFSET);
           originalStart.apply(self, args);
         });
       };
@@ -1759,7 +1893,7 @@ function buildSceneRuntimeScript(totalDuration, fps) {
   }
 
   ready.then(function () {
-    renderAt(0);
+    renderAt(OFFSET);
     if (hooked) return;
 
     // Fora do WVC (ex.: abrir a cena no navegador): relógio real via rAF.
@@ -2217,6 +2351,29 @@ async function detectBestEncoder() {
   return _encoderProbe;
 }
 
+/**
+ * Emenda os trechos do export paralelo sem recodificar (concat demuxer +
+ * -c copy): todos saíram do mesmo encoder com os mesmos parâmetros.
+ */
+async function concatChunks(chunkPaths, outputPath, format) {
+  const ffmpeg   = await getFfmpegBin();
+  const listPath = path.join(path.dirname(outputPath), 'chunks.txt');
+  // Entre aspas simples o caminho é literal; ' vira '\''
+  const quote = p => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`;
+  await fs.promises.writeFile(listPath, chunkPaths.map(quote).join('\n'));
+  try {
+    await execFileAsync(ffmpeg, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'concat', '-safe', '0', '-i', listPath,
+      '-c', 'copy',
+      ...(format === 'mp4' ? ['-movflags', '+faststart'] : []),
+      outputPath,
+    ]);
+  } finally {
+    fs.promises.unlink(listPath).catch(() => {});
+  }
+}
+
 function probeAudio(ffmpegBin, filePath) {
   return new Promise(resolve => {
     execFile(ffmpegBin, ['-hide_banner', '-i', filePath],
@@ -2447,17 +2604,29 @@ async function mixAudioTracks(
   );
 }
 
+/**
+ * range (export paralelo): { totalDuration, from, to } — a cena do trecho
+ * [from, to) leva só as camadas visíveis nele e começa o relógio em "from".
+ */
 function buildFullScene(
   clips,
   width,
   height,
   projectRoot,
   projectRes,
-  fps
+  fps,
+  range = null
 ) {
+  const from = range ? range.from : 0;
+  const to   = range ? range.to : Infinity;
+  const visibleInRange = clip => {
+    const start = finiteNumber(clip.start);
+    return start < to && start + Math.max(0, finiteNumber(clip.duration)) > from;
+  };
+
   // Áudio não tem camada visual: entra só na mixagem final
   const orderedClips =
-    clips.filter(clip => clip.type !== 'audio').sort(
+    clips.filter(clip => clip.type !== 'audio' && visibleInRange(clip)).sort(
       (first, second) =>
         finiteNumber(
           first.trackIndex
@@ -2508,12 +2677,14 @@ function buildFullScene(
           clip,
           width,
           height,
-          projectRes
+          projectRes,
+          from,
+          to
         );
       })
       .join('\n');
 
-  const totalDuration =
+  const totalDuration = range ? range.totalDuration :
     clips.reduce(
       (maximum, clip) =>
         Math.max(
@@ -2572,7 +2743,8 @@ ${layers}
 </div>
 ${buildSceneRuntimeScript(
   totalDuration,
-  fps
+  fps,
+  from
 )}
 </body>
 </html>`;

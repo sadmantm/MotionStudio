@@ -315,7 +315,8 @@ window.runExport = async function runExport() {
     rawH: document.getElementById('exportHeight')?.value,
     W, H,
   });
-  const workers = parseInt(document.getElementById('exportWorkers').value) || 2;
+  // 0 = automático (o servidor decide pelos núcleos e RAM livres)
+  const workers = Math.max(0, parseInt(document.getElementById('exportWorkers').value) || 0);
 
   document.getElementById('exportProgress').style.display = 'block';
   setExportBusy(true);
