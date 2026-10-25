@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Netvale — Contato</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;800&family=Inter:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Paleta — ajuste aqui para casar com a identidade da Netvale */
+  --base:#141b33;        /* fundo da cena                           */
+  --surface:#1a2447;     /* superfície neomórfica (elevada)         */
+  --hi:rgba(130,160,255,.16); /* sombra clara (luz vinda do canto sup. esq.) */
+  --lo:rgba(0,4,22,.80);      /* sombra escura                            */
+  --text:#f1f5ff;
+  --muted:#a4b1dc;
+  --cyan:#3ddcff;
+  --coral:#ff6a3d;
+  --gold:#ffb454;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--base);font-family:Inter,system-ui,sans-serif;color:var(--text)}
+#cam{position:absolute;inset:0;transform-origin:50% 50%}
+#stage{position:absolute;inset:0;transform-origin:50% 50%}
+.blob{position:absolute;border-radius:50%;filter:blur(110px);opacity:.6}
+#b1{width:1200px;height:1200px;left:-380px;top:-460px;background:#2a49b8}
+#b2{width:1000px;height:1000px;right:-320px;bottom:-460px;background:#0e7e9c}
+/* Neomorfismo: mesma cor do fundo, volume vem só das duas sombras */
+.neo{background:var(--surface);
+  box-shadow:-26px -26px 64px var(--hi), 30px 30px 74px var(--lo), inset 1px 1px 0 rgba(255,255,255,.07)}
+.neo-in{background:var(--base);
+  box-shadow:inset 16px 16px 40px var(--lo), inset -14px -14px 34px var(--hi)}
+/* Máscara de texto (reveal estilo Skiper): o span sobe de dentro do recorte */
+.m{display:block;overflow:hidden;padding-bottom:.14em;margin-bottom:-.14em}
+.m>span{display:inline-block}
+#streaks{position:absolute;inset:0;overflow:hidden}
+.st{position:absolute;height:3px;border-radius:2px;
+  background:linear-gradient(90deg,rgba(61,220,255,0),rgba(61,220,255,.75) 60%,rgba(255,255,255,.9));will-change:transform}
+#grain{position:absolute;inset:0;pointer-events:none;opacity:.08;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+#vig{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 50%,rgba(0,0,0,0) 52%,rgba(0,0,0,.62) 100%)}
+
+#rings{position:absolute;left:960px;top:540px;width:0;height:0}
+.ring{position:absolute;left:-400px;top:-400px;width:800px;height:800px;border-radius:50%;
+  border:3px solid var(--cyan);will-change:transform,opacity}
+#logoWrap{position:absolute;left:830px;top:70px;width:260px;height:260px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;will-change:transform,filter}
+#logoIn{width:214px;height:214px;border-radius:50%;display:flex;align-items:center;justify-content:center;overflow:hidden}
+#logo{width:170px;height:170px;object-fit:contain;display:block}
+#cta{position:absolute;left:0;right:0;top:372px;text-align:center;font-family:Sora,sans-serif;font-weight:800;
+  font-size:150px;line-height:1;letter-spacing:-.04em}
+#phone{position:absolute;left:390px;top:576px;width:1140px;height:180px;border-radius:90px;display:flex;align-items:center;
+  justify-content:center;gap:36px;font-family:Sora,sans-serif;font-weight:800;font-size:100px;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;will-change:transform,filter,opacity}
+#phone svg{width:92px;height:92px;flex:none}
+#phone path{fill:var(--coral)}
+#site{position:absolute;left:520px;top:800px;width:880px;height:118px;border-radius:60px;display:flex;align-items:center;
+  justify-content:center;font-size:54px;font-weight:600;color:var(--cyan);letter-spacing:.005em;will-change:transform,opacity,filter}
+#sub{position:absolute;left:0;right:0;top:964px;text-align:center;font-size:40px;font-weight:500;color:var(--muted)}
+
+</style>
+</head>
+<body>
+<div id="cam">
+  <div class="blob" id="b1"></div><div class="blob" id="b2"></div>
+  <div id="stage">
+    <div id="rings"><div class="ring"></div><div class="ring"></div><div class="ring"></div></div>
+    <div id="logoWrap" class="neo"><div id="logoIn" class="neo-in"><img id="logo" src="./logo.png" alt="Netvale"></div></div>
+    <div id="cta" class="m"><span id="ctaS">Assine agora</span></div>
+    <div id="phone" class="neo">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1l-2.3 2.2z"/></svg>
+      <span>(99) 99205-1850</span>
+    </div>
+    <div id="site" class="neo-in"><span>www.queronetvale.com.br</span></div>
+    <div id="sub" class="m"><span id="subS">Suporte 24 horas, todos os dias.</span></div>
+  </div>
+</div>
+<div id="grain"></div><div id="vig"></div>
+<script>
+(function () {
+  'use strict';
+
+  // ── 1. Configuração obrigatória ───────────────────────────────
+  var CONFIG = {
+    fps: 60,
+    durationInSeconds: 6,
+    totalFrames: 60 * 6,   // fps * durationInSeconds
+  };
+  var DUR = CONFIG.durationInSeconds;
+
+  // ── Helpers puros (tudo é função de t) ────────────────────────
+  function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
+  function seg(t, t0, d) { return clamp((t - t0) / d, 0, 1); }
+  function lerp(a, b, p) { return a + (b - a) * p; }
+  function frac(x) { return x - Math.floor(x); }
+  function eOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
+  function eInCubic(p) { return p * p * p; }
+  function eOutExpo(p) { return p >= 1 ? 1 : 1 - Math.pow(2, -10 * p); }
+  function eOutBack(p) { var c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
+  function eInOutQuint(p) { return p < .5 ? 16 * p * p * p * p * p : 1 - Math.pow(-2 * p + 2, 5) / 2; }
+  // pseudo-aleatório com seed fixa (mesmo valor em preview e export)
+  function hash(n) { var x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); }
+  function f(v, d) { return (+v).toFixed(d == null ? 3 : d); }
+
+  // Reveal de texto mascarado: sobe de dentro do recorte (.m) com leve rotação
+  function reveal(el, p, rot) {
+    if (p >= 1) { el.style.transform = 'none'; el.style.opacity = '1'; return; }
+    var e = eOutExpo(p);
+    el.style.transform = 'translateY(' + f((1 - e) * 112, 1) + '%) rotate(' + f((1 - e) * (rot == null ? 3 : rot), 2) + 'deg)';
+    el.style.opacity = f(clamp(p * 4, 0, 1));
+  }
+  // Entrada "pop" estilo AE: escala com overshoot + desfoque de movimento
+  function pop(el, p, from, blurMax) {
+    if (p >= 1) { el.style.transform = 'none'; el.style.opacity = '1'; el.style.filter = 'none'; return; }
+    var e = eOutBack(p);
+    el.style.transform = 'scale(' + f(lerp(from == null ? .6 : from, 1, e)) + ')';
+    el.style.opacity = f(clamp(p * 3, 0, 1));
+    el.style.filter = 'blur(' + f((1 - eOutCubic(p)) * (blurMax == null ? 18 : blurMax), 1) + 'px)';
+  }
+  // Saída padrão da cena: push da câmera + blur + fade (mantém o fundo)
+  function exitStage(stage, t, t0, d) {
+    var q = eInCubic(seg(t, t0, d));
+    stage.style.transform = 'scale(' + f(1 + .12 * q) + ')';
+    stage.style.filter = q > 0 ? 'blur(' + f(20 * q, 1) + 'px)' : 'none';
+    stage.style.opacity = f(1 - q);
+    return 1 - q;
+  }
+  function bgDrift(t) {
+    var b1 = document.getElementById('b1'), b2 = document.getElementById('b2');
+    var cam = document.getElementById('cam');
+    b1.style.transform = 'translate(' + f(Math.sin(t * .35) * 70, 1) + 'px,' + f(Math.cos(t * .28) * 50, 1) + 'px)';
+    b2.style.transform = 'translate(' + f(Math.cos(t * .31) * 80, 1) + 'px,' + f(Math.sin(t * .24) * 60, 1) + 'px)';
+    cam.style.transform = 'scale(' + f(1 + .035 * (t / DUR)) + ')'; // push-in lento
+  }
+  // Linhas de velocidade (seeded): posição derivada só de t
+  var STREAKS = [];
+  function buildStreaks(n) {
+    var host = document.getElementById('streaks');
+    if (!host || host.childNodes.length) return;
+    for (var i = 0; i < n; i++) {
+      var el = document.createElement('div'); el.className = 'st';
+      var len = 220 + hash(i * 3 + 1) * 520;
+      el.style.width = f(len, 0) + 'px';
+      el.style.top = f(40 + hash(i * 3 + 2) * 1000, 0) + 'px';
+      host.appendChild(el);
+      STREAKS.push({ el: el, len: len, speed: 1400 + hash(i * 3 + 3) * 2200, off: hash(i * 7 + 5), a: .25 + hash(i * 11) * .5 });
+    }
+  }
+  function drawStreaks(t, alpha) {
+    for (var i = 0; i < STREAKS.length; i++) {
+      var s = STREAKS[i], span = 1920 + s.len;
+      var x = frac(s.off + (t * s.speed) / span) * span - s.len;
+      s.el.style.transform = 'translateX(' + f(x, 1) + 'px)';
+      s.el.style.opacity = f(alpha * s.a);
+    }
+  }
+  function imgReady(img) {
+    return new Promise(function (res) {
+      if (!img || img.complete) return res();
+      img.onload = res; img.onerror = res;
+    });
+  }
+
+  var stage = document.getElementById('stage');
+  var logoWrap = document.getElementById('logoWrap');
+  var ctaS = document.getElementById('ctaS');
+  var phone = document.getElementById('phone');
+  var site = document.getElementById('site');
+  var subS = document.getElementById('subS');
+  var rings = document.querySelectorAll('.ring');
+
+  function init() {}
+
+  // ── 2. seek(t): TODO o estado visual é função pura de t ──────
+  function seek(t) {
+    t = clamp(t, 0, DUR);
+    bgDrift(t);
+    var pOut = exitStage(stage, t, DUR - .5, .5);
+
+    pop(logoWrap, seg(t, .05, .85), .5, 22);
+    reveal(ctaS, seg(t, .45, .85), 2);
+
+    // Telefone: entra de baixo com overshoot, depois "respira" levemente (função de t)
+    var pp = seg(t, .95, .9), ep = eOutBack(pp);
+    var breathe = 1 + .012 * Math.sin((t - 1.85) * 2.4) * seg(t, 1.85, .6);
+    phone.style.opacity = f(clamp(pp * 3, 0, 1));
+    phone.style.transform = 'translateY(' + f((1 - ep) * 140, 1) + 'px) scale(' + f(lerp(.8, 1, ep) * breathe) + ')';
+    phone.style.filter = 'blur(' + f((1 - eOutCubic(pp)) * 16, 1) + 'px)';
+
+    var ps = seg(t, 1.45, .8), es = eOutExpo(ps);
+    site.style.opacity = f(clamp(ps * 3, 0, 1));
+    site.style.transform = 'translateY(' + f((1 - es) * 80, 1) + 'px)';
+    site.style.filter = 'blur(' + f((1 - eOutCubic(ps)) * 10, 1) + 'px)';
+
+    reveal(subS, seg(t, 1.9, .7), 1.5);
+
+    var on = seg(t, .6, .8);
+    for (var i = 0; i < rings.length; i++) {
+      var ph = frac(t * .42 + i / 3);
+      rings[i].style.transform = 'scale(' + f(lerp(.9, 2.4, eOutCubic(ph))) + ')';
+      rings[i].style.opacity = f(on * (1 - ph) * (1 - ph) * .28);
+    }
+  }
+
+
+  // ── 3. renderFrame(f): mesmo render, endereçado por frame ─────
+  function renderFrame(fr) { seek(fr / CONFIG.fps); }
+
+  // ── 4. API pública — contrato window.Motion ───────────────────
+  window.Motion = {
+    config: CONFIG,
+    seek: seek,
+    renderFrame: renderFrame,
+    init: function () { init(); seek(0); },
+    whenReady: function () {
+      init();
+      var fonts = document.fonts ? document.fonts.ready : Promise.resolve();
+      var imgs = Array.prototype.map.call(document.images, imgReady);
+      return Promise.all([fonts].concat(imgs)).then(function () { seek(0); });
+    },
+  };
+  // window.Motion.config fica disponível para o player e o validador.
+})();
+</script>
+</body>
+</html>

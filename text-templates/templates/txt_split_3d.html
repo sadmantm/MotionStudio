@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+    font-family: {{fontFamily}};
+    perspective: 900px;
+  }
+
+  .text-stage {
+    position: absolute;
+    inset: 0;
+    background: {{bg}};
+    overflow: hidden;
+  }
+
+  .text-safe-area {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  /* Metade SUPERIOR entra de cima */
+  @keyframes ms_in_top {
+    0%   { clip-path: inset(0 0 50% 0); transform: translate(-50%, -50%) rotateX(-45deg) translateY(-40px); opacity: 0; }
+    60%  { opacity: 1; transform: translate(-50%, -50%) rotateX(4deg) translateY(0px); }
+    100% { clip-path: inset(0 0 50% 0); transform: translate(-50%, -50%) rotateX(0deg); opacity: 1; }
+  }
+
+  /* Metade INFERIOR entra de baixo */
+  @keyframes ms_in_bot {
+    0%   { clip-path: inset(50% 0 0 0); transform: translate(-50%, -50%) rotateX(45deg) translateY(40px); opacity: 0; }
+    60%  { opacity: 1; transform: translate(-50%, -50%) rotateX(-4deg) translateY(0px); }
+    100% { clip-path: inset(50% 0 0 0); transform: translate(-50%, -50%) rotateX(0deg); opacity: 1; }
+  }
+
+  /* Texto principal: saída */
+  @keyframes ms_out {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(1) rotateX(0deg); filter: blur(0); }
+    50%  { filter: blur(4px); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(0.88) rotateX(20deg); filter: blur(14px); }
+  }
+
+  /* Glow pulsante */
+  @keyframes glow_pulse {
+    0%, 100% { text-shadow: 0 0 18px rgba(255,255,255,0.4), 0 4px 24px rgba(0,0,0,0.5); }
+    50%       { text-shadow: 0 0 42px rgba(255,255,255,0.8), 0 0 80px rgba(255,255,255,0.2), 0 4px 24px rgba(0,0,0,0.5); }
+  }
+
+  /* Camada TOP */
+  #__txt_el::before {
+    content: attr(data-text);
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 100%;
+    transform: translate(-50%, -50%);
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    clip-path: inset(0 0 50% 0);
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  /* Camada BOTTOM */
+  #__txt_el::after {
+    content: attr(data-text);
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 100%;
+    transform: translate(-50%, -50%);
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    clip-path: inset(50% 0 0 0);
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  #__txt_el {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 88%;
+    max-width: 980px;
+    transform: translate(-50%, -50%);
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+    line-height: 1.08;
+    letter-spacing: -0.04em;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    opacity: 0;
+    will-change: transform, opacity, filter;
+    transform-style: preserve-3d;
+    text-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+</style>
+</head>
+
+<body>
+  <div class="text-stage">
+    <div class="text-safe-area">
+      <div id="__txt_el" data-text="{{text}}">{{text}}</div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const el = document.getElementById('__txt_el');
+  let DUR = Number({{duration}}) || 4;
+  let IN = Math.min(0.7, DUR * 0.18);
+  let OUT = Math.min(0.55, DUR * 0.14);
+
+  function recalcTiming() {
+    IN = Math.min(0.7, DUR * 0.18);
+    OUT = Math.min(0.55, DUR * 0.14);
+  }
+
+  function normalizeTime(t) {
+    t = Number(t);
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+  }
+
+  function clearMotionStyles() {
+    el.style.animation = '';
+    el.style.animationDelay = '';
+    el.style.animationPlayState = '';
+    el.style.opacity = '';
+  }
+
+  function reportSize() {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) { setTimeout(reportSize, 50); return; }
+  }
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: 30
+    },
+    whenReady() { return Promise.resolve(); },
+    setDuration(d) {
+      d = Number(d);
+      if (Number.isFinite(d) && d > 0) { DUR = d; recalcTiming(); }
+    },
+    seek(t) {
+      t = normalizeTime(t);
+      clearMotionStyles();
+
+      if (t <= 0) {
+        el.style.opacity = '0';
+        el.style.setProperty('--pseudo-op', '0');
+        return;
+      }
+
+      if (t <= IN) {
+        /* Durante entrada: mostra as duas metades animadas, esconde o el principal */
+        el.style.opacity = '0';
+
+        /* Anima ::before e ::after via classe */
+        el.dataset.phase = 'in';
+        el.style.setProperty('--in-dur', IN + 's');
+        el.style.setProperty('--in-delay', (-t) + 's');
+
+        /* Como não podemos animar pseudo via JS diretamente,
+           usamos uma classe + CSS variable trick via animation no próprio el
+           com as duas camadas espelhadas no ::before e ::after */
+
+        /* Fallback: anima o el inteiro */
+        el.style.animation = 'ms_in_top ' + IN + 's cubic-bezier(0.16,1,0.3,1) forwards';
+        el.style.animationDelay = (-t) + 's';
+        el.style.animationPlayState = 'paused';
+        el.style.opacity = '1';
+        el.style.clipPath = 'none';
+        return;
+      }
+
+      if (t >= DUR - OUT) {
+        const tOut = t - (DUR - OUT);
+        el.style.animation = 'ms_out ' + OUT + 's cubic-bezier(0.7,0,0.84,0) forwards';
+        el.style.animationDelay = (-tOut) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+
+      el.style.opacity = '1';
+      el.style.animation = 'glow_pulse 2.2s ease-in-out infinite';
+    }
+  };
+
+  window.Motion.seek(0);
+  if (document.fonts?.ready) { document.fonts.ready.then(reportSize); }
+  else { setTimeout(reportSize, 120); }
+  window.addEventListener('resize', reportSize);
+  window.__reportTextSize = reportSize;
+})();
+</script>
+</body>
+</html>

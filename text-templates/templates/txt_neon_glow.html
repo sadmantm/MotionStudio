@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+    font-family: {{fontFamily}};
+  }
+
+  .text-stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: {{bg}};
+  }
+
+  .text-safe-area {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  /* Scanline overlay */
+  .text-stage::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 3px,
+      rgba(0,0,0,0.07) 3px,
+      rgba(0,0,0,0.07) 4px
+    );
+    pointer-events: none;
+    z-index: 10;
+    opacity: 0.4;
+  }
+
+  @keyframes ms_in {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, -50%) scaleX(0.04) scaleY(1.1);
+      filter: blur(0px) brightness(3);
+      letter-spacing: 0.6em;
+    }
+    40% {
+      opacity: 1;
+      transform: translate(-50%, -50%) scaleX(1.03) scaleY(0.97);
+      filter: blur(0px) brightness(1.5);
+      letter-spacing: -0.025em;
+    }
+    60% {
+      transform: translate(-50%, -50%) scale(1);
+      filter: blur(0px) brightness(1.2);
+    }
+    100% {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+      filter: blur(0px) brightness(1);
+      letter-spacing: -0.025em;
+    }
+  }
+
+  @keyframes ms_out {
+    0% {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+      filter: blur(0px);
+    }
+    60% {
+      opacity: 0.6;
+      transform: translate(-50%, -50%) scaleX(1.06) scaleY(0.92);
+      filter: blur(2px) brightness(2);
+    }
+    100% {
+      opacity: 0;
+      transform: translate(-50%, -50%) scaleX(0.02) scaleY(0.8);
+      filter: blur(0px) brightness(3);
+    }
+  }
+
+  @keyframes neon_flicker {
+    0%, 95%, 100%   { opacity: 1; }
+    96%             { opacity: 0.85; }
+    97%             { opacity: 1; }
+    98%             { opacity: 0.7; }
+    99%             { opacity: 1; }
+  }
+
+  @keyframes glow_pulse {
+    0%, 100% {
+      text-shadow:
+        0 0 8px {{color}},
+        0 0 20px {{color}},
+        0 0 45px {{color}},
+        0 0 80px {{color}},
+        0 0 120px {{color}};
+    }
+    50% {
+      text-shadow:
+        0 0 4px {{color}},
+        0 0 12px {{color}},
+        0 0 28px {{color}},
+        0 0 55px {{color}},
+        0 0 90px {{color}};
+    }
+  }
+
+  #__txt_el {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+
+    width: 90%;
+    max-width: 960px;
+
+    transform: translate(-50%, -50%);
+
+    text-align: {{align}};
+    font-family: 'Orbitron', {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+
+    line-height: 1.15;
+    letter-spacing: -0.025em;
+    text-transform: uppercase;
+
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+
+    opacity: 0;
+    will-change: transform, opacity, filter;
+
+    text-shadow:
+      0 0 8px {{color}},
+      0 0 20px {{color}},
+      0 0 45px {{color}},
+      0 0 80px {{color}};
+
+    animation: glow_pulse 2.5s ease-in-out infinite, neon_flicker 6s linear infinite;
+  }
+
+  /* Neon underline bar */
+  #__txt_el::after {
+    content: "";
+    position: absolute;
+    bottom: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60%;
+    height: 2px;
+    background: {{color}};
+    box-shadow:
+      0 0 6px {{color}},
+      0 0 20px {{color}},
+      0 0 40px {{color}};
+    border-radius: 2px;
+    opacity: 0.85;
+  }
+</style>
+</head>
+<body>
+  <div class="text-stage">
+    <div class="text-safe-area">
+      <div id="__txt_el">{{text}}</div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const el = document.getElementById('__txt_el');
+  let DUR = Number({{duration}}) || 4;
+  let IN = Math.min(0.6, DUR * 0.15);
+  let OUT = Math.min(0.5, DUR * 0.12);
+
+  function recalcTiming() {
+    IN = Math.min(0.6, DUR * 0.15);
+    OUT = Math.min(0.5, DUR * 0.12);
+  }
+
+  function normalizeTime(t) {
+    t = Number(t);
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+  }
+
+  function clearMotionStyles() {
+    el.style.animation = '';
+    el.style.animationDelay = '';
+    el.style.animationPlayState = '';
+    el.style.opacity = '';
+  }
+
+  function reportSize() {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) { setTimeout(reportSize, 50); return; }
+  }
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: 30
+    },
+    whenReady() { return Promise.resolve(); },
+    setDuration(d) {
+      d = Number(d);
+      if (Number.isFinite(d) && d > 0) { DUR = d; recalcTiming(); }
+    },
+    seek(t) {
+      t = normalizeTime(t);
+      clearMotionStyles();
+      if (t <= 0) { el.style.opacity = '0'; return; }
+      if (t <= IN) {
+        el.style.animation = 'ms_in ' + IN + 's cubic-bezier(0.22, 1, 0.36, 1) forwards';
+        el.style.animationDelay = (-t) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+      if (t >= DUR - OUT) {
+        const tOut = t - (DUR - OUT);
+        el.style.animation = 'ms_out ' + OUT + 's ease forwards';
+        el.style.animationDelay = (-tOut) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+      el.style.opacity = '1';
+    }
+  };
+
+  window.Motion.seek(0);
+  if (document.fonts?.ready) { document.fonts.ready.then(reportSize); }
+  else { setTimeout(reportSize, 120); }
+  window.addEventListener('resize', reportSize);
+  window.__reportTextSize = reportSize;
+})();
+</script>
+</body>
+</html>

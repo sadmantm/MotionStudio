@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+    font-family: {{fontFamily}};
+  }
+
+  .text-stage {
+    position: absolute;
+    inset: 0;
+    background: {{bg}};
+  }
+
+  .text-safe-area {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  @keyframes ms_in {
+    0%   {
+      opacity: 0;
+      transform: translate(-50%, -50%) translateX(-28px);
+    }
+    50%  {
+      opacity: 1;
+      transform: translate(-50%, -50%) translateX(4px);
+    }
+    100% {
+      opacity: 1;
+      transform: translate(-50%, -50%) translateX(0);
+    }
+  }
+
+  @keyframes ms_out {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); filter: blur(0); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.04); filter: blur(6px); }
+  }
+
+  /* O "highlight" cresce da esquerda pra direita */
+  @keyframes highlight_grow {
+    0%   { clip-path: inset(0 100% 0 0); }
+    100% { clip-path: inset(0 0% 0 0); }
+  }
+
+  #__txt_el::before {
+    content: "";
+    position: absolute;
+    top: 2px; left: -8px;
+    right: -8px; bottom: 2px;
+    border-radius: 6px;
+    background: {{color}};
+    opacity: 0.22;
+    z-index: -1;
+    clip-path: inset(0 100% 0 0);
+    animation: highlight_grow 0.55s cubic-bezier(0.22,1,0.36,1) forwards;
+    animation-play-state: paused;
+  }
+
+  #__txt_el {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 82%;
+    max-width: 940px;
+    transform: translate(-50%, -50%);
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+    line-height: 1.12;
+    letter-spacing: -0.03em;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    opacity: 0;
+    will-change: transform, opacity, filter;
+    padding: 12px 18px;
+    border-left: 5px solid {{color}};
+    text-shadow: 0 2px 16px rgba(0,0,0,0.5);
+  }
+</style>
+</head>
+
+<body>
+  <div class="text-stage">
+    <div class="text-safe-area">
+      <div id="__txt_el">{{text}}</div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const el = document.getElementById('__txt_el');
+  let DUR = Number({{duration}}) || 4;
+  let IN = Math.min(0.6, DUR * 0.15);
+  let OUT = Math.min(0.5, DUR * 0.12);
+
+  function recalcTiming() {
+    IN = Math.min(0.6, DUR * 0.15);
+    OUT = Math.min(0.5, DUR * 0.12);
+  }
+
+  function normalizeTime(t) {
+    t = Number(t);
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+  }
+
+  function clearMotionStyles() {
+    el.style.animation = '';
+    el.style.animationDelay = '';
+    el.style.animationPlayState = '';
+    el.style.opacity = '';
+  }
+
+  function reportSize() {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) { setTimeout(reportSize, 50); return; }
+  }
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: 30
+    },
+    whenReady() { return Promise.resolve(); },
+    setDuration(d) {
+      d = Number(d);
+      if (Number.isFinite(d) && d > 0) { DUR = d; recalcTiming(); }
+    },
+    seek(t) {
+      t = normalizeTime(t);
+      clearMotionStyles();
+
+      if (t <= 0) { el.style.opacity = '0'; return; }
+
+      if (t <= IN) {
+        el.style.animation = 'ms_in ' + IN + 's cubic-bezier(0.22,1,0.36,1) forwards';
+        el.style.animationDelay = (-t) + 's';
+        el.style.animationPlayState = 'paused';
+
+        /* sincroniza o highlight com a entrada */
+        el.style.setProperty('--hl-delay', (-t) + 's');
+        const pseudo = window.getComputedStyle(el, '::before');
+        el.classList.remove('hl-active');
+        void el.offsetWidth;
+        el.classList.add('hl-active');
+        return;
+      }
+
+      if (t >= DUR - OUT) {
+        const tOut = t - (DUR - OUT);
+        el.style.animation = 'ms_out ' + OUT + 's ease forwards';
+        el.style.animationDelay = (-tOut) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+
+      el.style.opacity = '1';
+    }
+  };
+
+  window.Motion.seek(0);
+  if (document.fonts?.ready) { document.fonts.ready.then(reportSize); }
+  else { setTimeout(reportSize, 120); }
+  window.addEventListener('resize', reportSize);
+  window.__reportTextSize = reportSize;
+})();
+</script>
+</body>
+</html>

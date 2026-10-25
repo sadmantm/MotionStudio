@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Netvale — Plano 600 Mega</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;800&family=Inter:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Paleta — ajuste aqui para casar com a identidade da Netvale */
+  --base:#141b33;        /* fundo da cena                           */
+  --surface:#1a2447;     /* superfície neomórfica (elevada)         */
+  --hi:rgba(130,160,255,.16); /* sombra clara (luz vinda do canto sup. esq.) */
+  --lo:rgba(0,4,22,.80);      /* sombra escura                            */
+  --text:#f1f5ff;
+  --muted:#a4b1dc;
+  --cyan:#3ddcff;
+  --coral:#ff6a3d;
+  --gold:#ffb454;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--base);font-family:Inter,system-ui,sans-serif;color:var(--text)}
+#cam{position:absolute;inset:0;transform-origin:50% 50%}
+#stage{position:absolute;inset:0;transform-origin:50% 50%}
+.blob{position:absolute;border-radius:50%;filter:blur(110px);opacity:.6}
+#b1{width:1200px;height:1200px;left:-380px;top:-460px;background:#2a49b8}
+#b2{width:1000px;height:1000px;right:-320px;bottom:-460px;background:#0e7e9c}
+/* Neomorfismo: mesma cor do fundo, volume vem só das duas sombras */
+.neo{background:var(--surface);
+  box-shadow:-26px -26px 64px var(--hi), 30px 30px 74px var(--lo), inset 1px 1px 0 rgba(255,255,255,.07)}
+.neo-in{background:var(--base);
+  box-shadow:inset 16px 16px 40px var(--lo), inset -14px -14px 34px var(--hi)}
+/* Máscara de texto (reveal estilo Skiper): o span sobe de dentro do recorte */
+.m{display:block;overflow:hidden;padding-bottom:.14em;margin-bottom:-.14em}
+.m>span{display:inline-block}
+#streaks{position:absolute;inset:0;overflow:hidden}
+.st{position:absolute;height:3px;border-radius:2px;
+  background:linear-gradient(90deg,rgba(61,220,255,0),rgba(61,220,255,.75) 60%,rgba(255,255,255,.9));will-change:transform}
+#grain{position:absolute;inset:0;pointer-events:none;opacity:.08;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+#vig{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 50%,rgba(0,0,0,0) 52%,rgba(0,0,0,.62) 100%)}
+
+:root{--acc:var(--gold)}
+#gauge{position:absolute;left:230px;top:180px;width:580px;height:580px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;will-change:transform,filter}
+#gauge svg{position:absolute;inset:0}
+#gauge .track{fill:none;stroke:var(--base);stroke-width:34;
+  filter:drop-shadow(6px 6px 8px var(--lo)) drop-shadow(-4px -4px 6px var(--hi))}
+#arc{fill:none;stroke:var(--acc);stroke-width:22;stroke-linecap:round;
+  filter:drop-shadow(0 0 22px var(--acc))}
+#num{position:relative;text-align:center;line-height:.9}
+#speed{display:block;font-family:Sora,sans-serif;font-weight:800;font-size:220px;letter-spacing:-.05em;
+  font-variant-numeric:tabular-nums;will-change:filter}
+#num small{display:block;margin-top:22px;font-family:Sora,sans-serif;font-weight:600;font-size:64px;color:var(--acc);letter-spacing:-.01em}
+#planName{position:absolute;left:0;width:1040px;top:820px;text-align:center;font-family:Sora,sans-serif;font-weight:600;font-size:60px;color:var(--muted)}
+#card{position:absolute;left:920px;top:108px;width:890px;height:830px;border-radius:64px;padding:60px 66px 0;
+  overflow:hidden;will-change:transform,filter,opacity}
+#price{display:flex;align-items:baseline;gap:14px;white-space:nowrap;line-height:1}
+#rs{font-family:Sora,sans-serif;font-weight:600;font-size:64px;color:var(--muted);align-self:flex-start;margin-top:26px}
+#pInt{font-family:Sora,sans-serif;font-weight:800;font-size:180px;letter-spacing:-.06em}
+#pCent{font-family:Sora,sans-serif;font-weight:800;font-size:96px;letter-spacing:-.03em}
+#per{font-size:42px;font-weight:500;color:var(--muted);margin-left:12px}
+#div{height:8px;border-radius:4px;margin:26px 0 22px;transform-origin:0 50%}
+#ben{list-style:none}
+#ben li{display:flex;align-items:flex-start;gap:26px;padding:9px 0;will-change:transform,filter,opacity}
+#ben svg{flex:none;width:52px;height:52px;margin-top:2px;border-radius:50%;background:var(--base);
+  box-shadow:inset 5px 5px 10px var(--lo), inset -4px -4px 8px var(--hi)}
+#ben path{fill:none;stroke:var(--acc);stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:24;filter:drop-shadow(0 0 6px var(--acc))}
+#ben b{display:block;font-size:40px;font-weight:600;line-height:1.15}
+#ben i{display:block;font-style:normal;font-size:30px;color:var(--muted);margin-top:6px}
+#badge{position:absolute;right:-8px;top:54px;background:var(--gold);color:#1a1200;font-family:Sora,sans-serif;font-weight:800;
+  font-size:36px;padding:16px 42px;border-radius:40px 0 0 40px;box-shadow:0 14px 40px rgba(255,180,84,.45);transform-origin:100% 50%;will-change:transform}
+#shine{position:absolute;top:-200px;left:0;width:260px;height:1400px;pointer-events:none;
+  background:linear-gradient(100deg,rgba(255,255,255,0),rgba(255,255,255,.18) 50%,rgba(255,255,255,0));transform:rotate(14deg)}
+#dots{position:absolute;left:50%;bottom:60px;transform:translateX(-50%);display:flex;gap:18px}
+#dots i{width:18px;height:18px;border-radius:50%;background:var(--base);box-shadow:inset 3px 3px 6px var(--lo), inset -2px -2px 5px var(--hi)}
+#dots i.on{background:var(--acc);box-shadow:0 0 18px var(--acc)}
+
+#foot{position:absolute;left:120px;right:120px;bottom:52px;display:flex;justify-content:space-between;font-size:34px;font-weight:600;color:var(--muted);letter-spacing:.01em}
+
+</style>
+</head>
+<body>
+<div id="cam">
+  <div class="blob" id="b1"></div><div class="blob" id="b2"></div>
+  <div id="stage">
+    <div id="gauge" class="neo">
+      <svg viewBox="0 0 580 580" width="580" height="580" aria-hidden="true">
+        <circle class="track" cx="290" cy="290" r="244"/>
+        <circle id="arc" cx="290" cy="290" r="244" transform="rotate(-90 290 290)"/>
+      </svg>
+      <div id="num"><span id="speed">0</span><small>mega</small></div>
+    </div>
+    <div id="planName" class="m"><span id="planNameS">Plano 600 Mega</span></div>
+
+    <div id="card" class="neo">
+      <div id="badge">Mais escolhido</div>
+      <div id="price">
+        <span class="m" style="display:inline-block"><span id="rs">R$</span></span>
+        <span class="m" style="display:inline-block"><span id="pInt">49</span></span>
+        <span class="m" style="display:inline-block"><span id="pCent">,95</span></span>
+        <span class="m" id="per" style="display:inline-block"><span id="perS">/ 2 meses</span></span>
+      </div>
+      <div id="div" class="neo-in"></div>
+      <ul id="ben">
+        <li><svg viewBox="0 0 52 52" aria-hidden="true"><path d="M16 27l7 7 14-16"/></svg><div><b>Velocidade 600 mega</b></div></li>
+        <li><svg viewBox="0 0 52 52" aria-hidden="true"><path d="M16 27l7 7 14-16"/></svg><div><b>Suporte 24 horas</b></div></li>
+        <li><svg viewBox="0 0 52 52" aria-hidden="true"><path d="M16 27l7 7 14-16"/></svg><div><b>Wi-Fi premium</b></div></li>
+        <li><svg viewBox="0 0 52 52" aria-hidden="true"><path d="M16 27l7 7 14-16"/></svg><div><b>Globoplay por 2 meses</b><i>Incluso no plano, padrão com anúncios</i></div></li>
+        <li><svg viewBox="0 0 52 52" aria-hidden="true"><path d="M16 27l7 7 14-16"/></svg><div><b>+ 50 canais</b></div></li>
+        <li><svg viewBox="0 0 52 52" aria-hidden="true"><path d="M16 27l7 7 14-16"/></svg><div><b>P! Livros</b></div></li>
+      </ul>
+      <div id="shine"></div>
+    </div>
+
+    <div id="dots"><i></i><i class="on"></i><i></i></div>
+    <div id="foot">
+  <span class="ft" id="ftSite">queronetvale.com.br</span>
+  <span class="ft" id="ftTel">(99) 99205-1850</span>
+</div>
+  </div>
+</div>
+<div id="grain"></div><div id="vig"></div>
+<script>
+(function () {
+  'use strict';
+
+  // ── 1. Configuração obrigatória ───────────────────────────────
+  var CONFIG = {
+    fps: 60,
+    durationInSeconds: 6,
+    totalFrames: 60 * 6,   // fps * durationInSeconds
+  };
+  var DUR = CONFIG.durationInSeconds;
+
+  // ── Helpers puros (tudo é função de t) ────────────────────────
+  function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
+  function seg(t, t0, d) { return clamp((t - t0) / d, 0, 1); }
+  function lerp(a, b, p) { return a + (b - a) * p; }
+  function frac(x) { return x - Math.floor(x); }
+  function eOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
+  function eInCubic(p) { return p * p * p; }
+  function eOutExpo(p) { return p >= 1 ? 1 : 1 - Math.pow(2, -10 * p); }
+  function eOutBack(p) { var c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); }
+  function eInOutQuint(p) { return p < .5 ? 16 * p * p * p * p * p : 1 - Math.pow(-2 * p + 2, 5) / 2; }
+  // pseudo-aleatório com seed fixa (mesmo valor em preview e export)
+  function hash(n) { var x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); }
+  function f(v, d) { return (+v).toFixed(d == null ? 3 : d); }
+
+  // Reveal de texto mascarado: sobe de dentro do recorte (.m) com leve rotação
+  function reveal(el, p, rot) {
+    if (p >= 1) { el.style.transform = 'none'; el.style.opacity = '1'; return; }
+    var e = eOutExpo(p);
+    el.style.transform = 'translateY(' + f((1 - e) * 112, 1) + '%) rotate(' + f((1 - e) * (rot == null ? 3 : rot), 2) + 'deg)';
+    el.style.opacity = f(clamp(p * 4, 0, 1));
+  }
+  // Entrada "pop" estilo AE: escala com overshoot + desfoque de movimento
+  function pop(el, p, from, blurMax) {
+    if (p >= 1) { el.style.transform = 'none'; el.style.opacity = '1'; el.style.filter = 'none'; return; }
+    var e = eOutBack(p);
+    el.style.transform = 'scale(' + f(lerp(from == null ? .6 : from, 1, e)) + ')';
+    el.style.opacity = f(clamp(p * 3, 0, 1));
+    el.style.filter = 'blur(' + f((1 - eOutCubic(p)) * (blurMax == null ? 18 : blurMax), 1) + 'px)';
+  }
+  // Saída padrão da cena: push da câmera + blur + fade (mantém o fundo)
+  function exitStage(stage, t, t0, d) {
+    var q = eInCubic(seg(t, t0, d));
+    stage.style.transform = 'scale(' + f(1 + .12 * q) + ')';
+    stage.style.filter = q > 0 ? 'blur(' + f(20 * q, 1) + 'px)' : 'none';
+    stage.style.opacity = f(1 - q);
+    return 1 - q;
+  }
+  function bgDrift(t) {
+    var b1 = document.getElementById('b1'), b2 = document.getElementById('b2');
+    var cam = document.getElementById('cam');
+    b1.style.transform = 'translate(' + f(Math.sin(t * .35) * 70, 1) + 'px,' + f(Math.cos(t * .28) * 50, 1) + 'px)';
+    b2.style.transform = 'translate(' + f(Math.cos(t * .31) * 80, 1) + 'px,' + f(Math.sin(t * .24) * 60, 1) + 'px)';
+    cam.style.transform = 'scale(' + f(1 + .035 * (t / DUR)) + ')'; // push-in lento
+  }
+  // Linhas de velocidade (seeded): posição derivada só de t
+  var STREAKS = [];
+  function buildStreaks(n) {
+    var host = document.getElementById('streaks');
+    if (!host || host.childNodes.length) return;
+    for (var i = 0; i < n; i++) {
+      var el = document.createElement('div'); el.className = 'st';
+      var len = 220 + hash(i * 3 + 1) * 520;
+      el.style.width = f(len, 0) + 'px';
+      el.style.top = f(40 + hash(i * 3 + 2) * 1000, 0) + 'px';
+      host.appendChild(el);
+      STREAKS.push({ el: el, len: len, speed: 1400 + hash(i * 3 + 3) * 2200, off: hash(i * 7 + 5), a: .25 + hash(i * 11) * .5 });
+    }
+  }
+  function drawStreaks(t, alpha) {
+    for (var i = 0; i < STREAKS.length; i++) {
+      var s = STREAKS[i], span = 1920 + s.len;
+      var x = frac(s.off + (t * s.speed) / span) * span - s.len;
+      s.el.style.transform = 'translateX(' + f(x, 1) + 'px)';
+      s.el.style.opacity = f(alpha * s.a);
+    }
+  }
+  function imgReady(img) {
+    return new Promise(function (res) {
+      if (!img || img.complete) return res();
+      img.onload = res; img.onerror = res;
+    });
+  }
+
+  var stage = document.getElementById('stage');
+  var gauge = document.getElementById('gauge'), arc = document.getElementById('arc');
+  var speed = document.getElementById('speed');
+  var planNameS = document.getElementById('planNameS');
+  var card = document.getElementById('card');
+  var rs = document.getElementById('rs'), pInt = document.getElementById('pInt'), pCent = document.getElementById('pCent'), perS = document.getElementById('perS');
+  var divl = document.getElementById('div');
+  var items = document.querySelectorAll('#ben li');
+  var badge = document.getElementById('badge');
+  var shine = document.getElementById('shine');
+  var foot = document.getElementById('foot'), dots = document.getElementById('dots');
+  var SPEED = 600, MAX = 800;
+  var CIRC = 2 * Math.PI * 244;
+  var HIGHLIGHT = 1;
+
+  function init() {
+    arc.setAttribute('stroke-dasharray', f(CIRC, 2));
+  }
+
+  // ── 2. seek(t): TODO o estado visual é função pura de t ──────
+  function seek(t) {
+    t = clamp(t, 0, DUR);
+    bgDrift(t);
+    var pOut = exitStage(stage, t, DUR - .6, .6);
+
+    // Medidor: pop + arco preenche até a fração da velocidade máxima
+    pop(gauge, seg(t, .05, .9), .6, 26);
+    var pg = seg(t, .35, 1.4), eg = eOutExpo(pg);
+    arc.setAttribute('stroke-dashoffset', f(CIRC * (1 - (SPEED / MAX) * eg), 2));
+    speed.textContent = String(Math.round(eg * SPEED));
+    speed.style.filter = 'blur(' + f((1 - eg) * 4, 1) + 'px)';
+    reveal(planNameS, seg(t, .9, .7), 2);
+
+    // Card entra da direita com desfoque de movimento
+    var pcard = seg(t, .15, .95), ec = eOutExpo(pcard);
+    card.style.opacity = f(clamp(pcard * 3, 0, 1));
+    card.style.transform = 'translateX(' + f((1 - ec) * 260, 1) + 'px) scale(' + f(lerp(.94, 1, ec)) + ')';
+    card.style.filter = 'blur(' + f((1 - eOutCubic(pcard)) * 16, 1) + 'px)';
+
+    // Preço: três máscaras em cascata
+    reveal(rs, seg(t, .55, .7), 3);
+    reveal(pInt, seg(t, .62, .8), 3);
+    reveal(pCent, seg(t, .74, .8), 3);
+    reveal(perS, seg(t, .9, .7), 2);
+
+    var pd = eInOutQuint(seg(t, .95, .6));
+    divl.style.transform = 'scaleX(' + f(pd) + ')';
+    divl.style.opacity = f(pd);
+
+    // Benefícios em cascata, check desenhado por dashoffset
+    for (var i = 0; i < items.length; i++) {
+      var p = seg(t, 1.1 + i * .17, .7), e = eOutExpo(p);
+      items[i].style.opacity = f(clamp(p * 3, 0, 1));
+      items[i].style.transform = 'translateX(' + f((1 - e) * -70, 1) + 'px)';
+      items[i].style.filter = 'blur(' + f((1 - eOutCubic(p)) * 10, 1) + 'px)';
+      var path = items[i].querySelector('path');
+      path.setAttribute('stroke-dashoffset', f(24 * (1 - eOutCubic(seg(t, 1.3 + i * .17, .55))), 2));
+    }
+
+    if (badge) {
+      var pb = seg(t, 1.0, .8), eb = eOutBack(pb);
+      badge.style.opacity = f(clamp(pb * 3, 0, 1));
+      badge.style.transform = 'translateX(' + f((1 - eb) * 140, 1) + 'px) rotate(' + f((1 - eb) * -6, 2) + 'deg)';
+      // brilho varre o card quando o preço assenta, e de novo perto do fim
+      var sw = Math.max(seg(t, 1.5, 1.1), seg(t, DUR - 2.0, 1.1));
+      shine.style.transform = 'translateX(' + f(lerp(-420, 1100, eInOutQuint(sw)), 1) + 'px) rotate(14deg)';
+      shine.style.opacity = f(Math.sin(Math.PI * sw));
+    } else {
+      shine.style.opacity = '0';
+    }
+
+    var pf = eOutCubic(seg(t, 1.3, .7));
+    foot.style.opacity = f(pf); dots.style.opacity = f(pf);
+    foot.style.transform = 'translateY(' + f((1 - pf) * 24, 1) + 'px)';
+  }
+
+
+  // ── 3. renderFrame(f): mesmo render, endereçado por frame ─────
+  function renderFrame(fr) { seek(fr / CONFIG.fps); }
+
+  // ── 4. API pública — contrato window.Motion ───────────────────
+  window.Motion = {
+    config: CONFIG,
+    seek: seek,
+    renderFrame: renderFrame,
+    init: function () { init(); seek(0); },
+    whenReady: function () {
+      init();
+      var fonts = document.fonts ? document.fonts.ready : Promise.resolve();
+      var imgs = Array.prototype.map.call(document.images, imgReady);
+      return Promise.all([fonts].concat(imgs)).then(function () { seek(0); });
+    },
+  };
+  // window.Motion.config fica disponível para o player e o validador.
+})();
+</script>
+</body>
+</html>

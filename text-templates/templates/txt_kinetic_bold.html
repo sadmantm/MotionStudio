@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+    font-family: {{fontFamily}};
+  }
+
+  .text-stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: {{bg}};
+  }
+
+  .text-safe-area {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ---- Wrapper that holds the text block ---- */
+  .kinetic-wrapper {
+    position: relative;
+    width: 88%;
+    max-width: 960px;
+    text-align: {{align}};
+  }
+
+  /* ---- Accent bar that slides in ---- */
+  @keyframes bar_in {
+    0%   { transform: scaleX(0); opacity: 0; transform-origin: left center; }
+    60%  { transform: scaleX(1.04); opacity: 1; transform-origin: left center; }
+    100% { transform: scaleX(1); opacity: 1; transform-origin: left center; }
+  }
+  @keyframes bar_out {
+    0%   { transform: scaleX(1); opacity: 1; transform-origin: right center; }
+    100% { transform: scaleX(0); opacity: 0; transform-origin: right center; }
+  }
+
+  .kinetic-bar {
+    display: block;
+    width: 72px;
+    height: 7px;
+    background: {{color}};
+    border-radius: 4px;
+    margin-bottom: 14px;
+    margin-left: {{align}} == 'center' ? auto : 0;
+    opacity: 0;
+  }
+
+  /* ---- Main text element ---- */
+  @keyframes ms_in {
+    0% {
+      opacity: 0;
+      transform: translateY(62px) skewY(4deg);
+      filter: blur(4px);
+    }
+    55% {
+      opacity: 1;
+      filter: blur(0px);
+    }
+    80% {
+      transform: translateY(-5px) skewY(-0.5deg);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) skewY(0deg);
+      filter: blur(0px);
+    }
+  }
+
+  @keyframes ms_out {
+    0% {
+      opacity: 1;
+      transform: translateY(0) skewY(0deg);
+      filter: blur(0px);
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-50px) skewY(-3deg);
+      filter: blur(3px);
+    }
+  }
+
+  #__txt_el {
+    display: block;
+    width: 100%;
+
+    text-align: {{align}};
+    font-family: 'Bebas Neue', 'Barlow Condensed', {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+
+    line-height: 0.95;
+    letter-spacing: 0.035em;
+    text-transform: uppercase;
+
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+
+    opacity: 0;
+    will-change: transform, opacity, filter;
+
+    /* Strong directional shadow for depth */
+    text-shadow:
+      4px 4px 0px rgba(0,0,0,0.5),
+      6px 6px 0px rgba(0,0,0,0.25),
+      0 12px 32px rgba(0,0,0,0.4);
+  }
+
+  /* Knockout outline ghost behind text */
+  #__txt_el::before {
+    content: attr(data-text);
+    position: absolute;
+    left: 4px;
+    top: 4px;
+    width: 100%;
+    text-align: {{align}};
+    font-family: 'Bebas Neue', 'Barlow Condensed', {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: transparent;
+    -webkit-text-stroke: 1.5px rgba(255,255,255,0.12);
+    line-height: 0.95;
+    letter-spacing: 0.035em;
+    text-transform: uppercase;
+    pointer-events: none;
+    z-index: -1;
+  }
+</style>
+</head>
+<body>
+  <div class="text-stage">
+    <div class="text-safe-area">
+      <div class="kinetic-wrapper">
+        <span class="kinetic-bar" id="__kb"></span>
+        <div id="__txt_el">{{text}}</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const el = document.getElementById('__txt_el');
+  const bar = document.getElementById('__kb');
+  let DUR = Number({{duration}}) || 4;
+  let IN = Math.min(0.55, DUR * 0.14);
+  let OUT = Math.min(0.45, DUR * 0.11);
+
+  function recalcTiming() {
+    IN = Math.min(0.55, DUR * 0.14);
+    OUT = Math.min(0.45, DUR * 0.11);
+  }
+
+  function normalizeTime(t) {
+    t = Number(t);
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+  }
+
+  function clearMotionStyles() {
+    el.style.animation = '';
+    el.style.animationDelay = '';
+    el.style.animationPlayState = '';
+    el.style.opacity = '';
+    bar.style.animation = '';
+    bar.style.animationDelay = '';
+    bar.style.animationPlayState = '';
+    bar.style.opacity = '';
+  }
+
+  function reportSize() {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) { setTimeout(reportSize, 50); return; }
+  }
+
+  // Mirror text content to ::before pseudo for ghost outline
+  function syncGhost() {
+    el.setAttribute('data-text', el.textContent);
+  }
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: 30
+    },
+    whenReady() { return Promise.resolve(); },
+    setDuration(d) {
+      d = Number(d);
+      if (Number.isFinite(d) && d > 0) { DUR = d; recalcTiming(); }
+    },
+    seek(t) {
+      t = normalizeTime(t);
+      clearMotionStyles();
+      syncGhost();
+
+      if (t <= 0) {
+        el.style.opacity = '0';
+        bar.style.opacity = '0';
+        return;
+      }
+
+      const BAR_IN  = IN * 0.7;
+      const BAR_OUT = OUT * 0.8;
+
+      if (t <= IN) {
+        // Bar animates slightly before text
+        if (t <= BAR_IN) {
+          bar.style.animation = 'bar_in ' + BAR_IN + 's cubic-bezier(0.22, 1, 0.36, 1) forwards';
+          bar.style.animationDelay = (-t) + 's';
+          bar.style.animationPlayState = 'paused';
+        } else {
+          bar.style.opacity = '1';
+        }
+        el.style.animation = 'ms_in ' + IN + 's cubic-bezier(0.22, 1, 0.36, 1) forwards';
+        el.style.animationDelay = (-t) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+
+      if (t >= DUR - OUT) {
+        const tOut = t - (DUR - OUT);
+        bar.style.animation = 'bar_out ' + BAR_OUT + 's ease forwards';
+        bar.style.animationDelay = (-tOut) + 's';
+        bar.style.animationPlayState = 'paused';
+        el.style.animation = 'ms_out ' + OUT + 's ease forwards';
+        el.style.animationDelay = (-tOut) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+
+      el.style.opacity = '1';
+      bar.style.opacity = '1';
+    }
+  };
+
+  window.Motion.seek(0);
+  if (document.fonts?.ready) { document.fonts.ready.then(reportSize); }
+  else { setTimeout(reportSize, 120); }
+  window.addEventListener('resize', reportSize);
+  window.__reportTextSize = reportSize;
+})();
+</script>
+</body>
+</html>

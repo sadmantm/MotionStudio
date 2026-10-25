@@ -1,0 +1,242 @@
+[
+  {
+    "id": "txt_caption_karaoke",
+    "name": "Legenda Karaokê",
+    "desc": "Palavras surgem com pop no ritmo da fala e a palavra ativa ganha destaque colorido (estilo CapCut)",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_karaoke.html",
+    "defaults": {
+      "text": "Legendas que acompanham cada palavra",
+      "fontFamily": "'Montserrat', sans-serif",
+      "fontSize": 72,
+      "fontWeight": "900",
+      "color": "#ffffff",
+      "highlightColor": "#82ea00",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
+    "id": "txt_caption_box",
+    "name": "Legenda Caixa Destaque",
+    "desc": "Frase inteira na tela com uma caixa arredondada pulando de palavra em palavra conforme a fala (estilo CapCut)",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_box.html",
+    "defaults": {
+      "text": "Destaque palavra por palavra",
+      "fontFamily": "'Montserrat', sans-serif",
+      "fontSize": 72,
+      "fontWeight": "900",
+      "color": "#ffffff",
+      "highlightColor": "#82ea00",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
+    "id": "txt_glitch_pop",
+    "name": "Glitch Pop",
+    "desc": "Split RGB neon com aberração cromática e glitch de entrada",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_glitch_pop.html",
+    "defaults": {
+      "text": "TEXTO\nIMPACTO",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 108,
+      "fontWeight": "900",
+      "color": "#ffffff",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 4
+    }
+  },
+  {
+    "id": "txt_word_reveal",
+    "name": "Word Reveal",
+    "desc": "Texto sobe por clip-path com linha decorativa — estilo editorial",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_word_reveal.html",
+    "defaults": {
+      "text": "Sua mensagem\naqui",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 96,
+      "fontWeight": "800",
+      "color": "#ffffff",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 4
+    }
+  },
+  {
+    "id": "txt_highlight_burn",
+    "name": "Highlight Burn",
+    "desc": "Fundo cresce como marca-texto com borda lateral colorida",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_highlight_burn.html",
+    "defaults": {
+      "text": "Ponto\nchave aqui",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 88,
+      "fontWeight": "800",
+      "color": "#FFD600",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 4
+    }
+  },
+  {
+    "id": "txt_typewriter_blink",
+    "name": "Typewriter Blink",
+    "desc": "Revelação tipo máquina de escrever com cursor piscante",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_typewriter_blink.html",
+    "defaults": {
+      "text": "Digitando\nsua legenda...",
+      "fontFamily": "'Courier New', monospace",
+      "fontSize": 80,
+      "fontWeight": "700",
+      "color": "#00FF9D",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 5
+    }
+  },
+  {
+    "id": "txt_split_3d",
+    "name": "Split 3D",
+    "desc": "Duas metades do texto se unem em perspectiva 3D com glow pulsante",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_split_3d.html",
+    "defaults": {
+      "text": "IMPACTO\nTOTAL",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 114,
+      "fontWeight": "900",
+      "color": "#ffffff",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 4
+    }
+  },
+  {
+    "id": "txt_neon_glow",
+    "name": "Neon Glow",
+    "desc": "Texto estilo cyberpunk com brilho neon pulsante e efeito de scanlines. Ideal para temas tech, gaming e futurísticos.",
+    "category": "Efeitos",
+    "file": "text-templates/templates/txt_neon_glow.html",
+    "defaults": {
+      "text": "NEON\nSTUDIO",
+      "fontFamily": "Orbitron, sans-serif",
+      "fontSize": 120,
+      "fontWeight": "900",
+      "color": "#00f5ff",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 5
+    }
+  },
+  {
+    "id": "txt_luxury_gold",
+    "name": "Luxury Gold",
+    "desc": "Título elegante em dourado com shimmer animado e linhas decorativas. Perfeito para marcas premium, eventos e moda.",
+    "category": "Títulos",
+    "file": "text-templates/templates/txt_luxury_gold.html",
+    "defaults": {
+      "text": "Elegância\nem cada detalhe",
+      "fontFamily": "Playfair Display, serif",
+      "fontSize": 96,
+      "fontWeight": "900",
+      "color": "#e8c96a",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 5
+    }
+  },
+  {
+    "id": "txt_kinetic_bold",
+    "name": "Kinetic Bold",
+    "desc": "Texto impactante em caixa alta com entrada skew dramática e barra de acento animada. Para conteúdo esportivo e corporativo.",
+    "category": "Títulos",
+    "file": "text-templates/templates/txt_kinetic_bold.html",
+    "defaults": {
+      "text": "RESULTADOS\nQUE IMPORTAM",
+      "fontFamily": "Bebas Neue, sans-serif",
+      "fontSize": 110,
+      "fontWeight": "400",
+      "color": "#ffffff",
+      "align": "left",
+      "bg": "transparent",
+      "duration": 5
+    }
+  },
+  {
+    "id": "txt_glassmorphism",
+    "name": "Glassmorphism",
+    "desc": "Texto dentro de card glass com backdrop blur, borda sutil e orbs de profundidade. Moderno e versátil.",
+    "category": "Cards",
+    "file": "text-templates/templates/txt_glassmorphism.html",
+    "defaults": {
+      "text": "Sua mensagem\naqui",
+      "fontFamily": "DM Sans, sans-serif",
+      "fontSize": 88,
+      "fontWeight": "900",
+      "color": "#ffffff",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 5
+    }
+  },
+  {
+    "id": "txt_whatsapp_card",
+    "name": "WhatsApp / Telefone",
+    "desc": "Card de contato animado com ícones de telefone e WhatsApp, número configurável e CTA. Ideal para anúncios e promoções.",
+    "category": "Contato",
+    "file": "text-templates/templates/txt_whatsapp_card.html",
+    "defaults": {
+      "text": "(99) 9 9999-9999",
+      "fontFamily": "Syne Mono, monospace",
+      "fontSize": 86,
+      "fontWeight": "700",
+      "color": "#ffffff",
+      "align": "left",
+      "bg": "transparent",
+      "duration": 6
+    }
+  },
+  {
+    "id": "txt_wa_signal",
+    "name": "WA Signal",
+    "desc": "Ícone do WhatsApp desenhado por traço SVG animado (stroke draw-on), ondas de sinal pulsando, e o número revelado caractere por caractere com efeito de queda + bounce. Sem fundo.",
+    "category": "Contato",
+    "file": "text-templates/templates/txt_wa_signal.html",
+    "defaults": {
+      "text": "(99) 9 9999-9999",
+      "fontFamily": "Space Grotesk, sans-serif",
+      "fontSize": 88,
+      "fontWeight": "700",
+      "color": "#25d366",
+      "align": "left",
+      "bg": "transparent",
+      "duration": 6
+    }
+  },
+  {
+    "id": "txt_wa_orbit",
+    "name": "WA Orbit",
+    "desc": "Partículas orbitam e colapsam formando o ícone do WhatsApp (giro + escala com bounce). Linha separadora cresce. Número revelado com efeito scramble — dígitos aleatórios até o número real aparecer. Sem fundo.",
+    "category": "Contato",
+    "file": "text-templates/templates/txt_wa_orbit.html",
+    "defaults": {
+      "text": "(99) 9 9999-9999",
+      "fontFamily": "Unbounded, sans-serif",
+      "fontSize": 82,
+      "fontWeight": "700",
+      "color": "#25d366",
+      "align": "left",
+      "bg": "transparent",
+      "duration": 6
+    }
+  }
+]

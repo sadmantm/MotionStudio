@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+    font-family: {{fontFamily}};
+  }
+
+  .text-stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: {{bg}};
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #__txt_el {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    font-size: 1px;
+    color: transparent;
+  }
+
+  .wa-row {
+    display: flex;
+    align-items: center;
+    gap: calc({{fontSize}}px * 0.38);
+    will-change: transform, opacity, filter;
+    opacity: 0;
+  }
+
+  .wa-icon-wrap {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .wa-svg {
+    width:  calc({{fontSize}}px * 1.05);
+    height: calc({{fontSize}}px * 1.05);
+    overflow: visible;
+    display: block;
+  }
+
+  .wa-circle {
+    fill: none;
+    stroke: {{color}};
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-dasharray: 200;
+    stroke-dashoffset: 200;
+  }
+
+  .wa-path {
+    fill: none;
+    stroke: {{color}};
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 300;
+    stroke-dashoffset: 300;
+  }
+
+  .wa-ring {
+    position: absolute;
+    top: 50%; left: 50%;
+    width:  calc({{fontSize}}px * 1.05);
+    height: calc({{fontSize}}px * 1.05);
+    border-radius: 50%;
+    border: 2px solid {{color}};
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .wa-number {
+    text-shadow:
+      -5px -5px 0 white,
+       5px -5px 0 white,
+      -5px  5px 0 white,
+       5px  5px 0 white,
+      -6px  0   0 white,
+       6px  0   0 white,
+       0   -6px 0 white,
+       0    6px 0 white;
+    font-family: 'Space Grotesk', {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: 700;
+    color: {{color}};
+    letter-spacing: 0.1em;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .wa-number .char {
+    display: inline-block;
+    opacity: 0;
+    transform: translateY(0);
+    will-change: transform, opacity;
+  }
+
+  .wa-cursor {
+    display: inline-block;
+    width: 3px;
+    height: calc({{fontSize}}px * 0.72);
+    background: {{color}};
+    border-radius: 2px;
+    margin-right: calc({{fontSize}}px * 0.08);
+    vertical-align: middle;
+    opacity: 0;
+  }
+
+  @keyframes ms_in  {
+    0%   { opacity: 0; }
+    100% { opacity: 1; }
+  }
+  @keyframes ms_out {
+    0%   { opacity: 1; transform: translateY(0); filter: blur(0); }
+    100% { opacity: 0; transform: translateY(-28px); filter: blur(6px); }
+  }
+</style>
+</head>
+<body>
+  <div class="text-stage">
+
+    <div id="__txt_el">{{text}}</div>
+
+    <div class="wa-row" id="__wa_row">
+
+      <div class="wa-icon-wrap" id="__wa_icon_wrap">
+
+        <div class="wa-ring" id="__ring1"></div>
+        <div class="wa-ring" id="__ring2"></div>
+        <div class="wa-ring" id="__ring3"></div>
+
+        <svg class="wa-svg" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" id="__wa_svg">
+
+          <!--
+            VISUAL: 3-layer icon for contrast with vibrant colors.
+            Layer 1 (bottom): white circle — creates a clean base so the icon "floats"
+            Layer 2: colored bubble fill — the brand color, full opacity
+            Layer 3: white handset — solid white path on top of the colored bubble
+            Layer 4 (top): stroke paths that draw in, then fade out as fills appear
+          -->
+
+          <!-- Layer 1: white base circle (fades in with fills) -->
+          <circle id="__wa_fill_bg" cx="16" cy="16" r="14.5" fill="white" opacity="0"/>
+
+          <!-- Layer 2: colored bubble (fades in with fills) -->
+          <path id="__wa_fill_compound"
+            fill="{{color}}"
+            opacity="0"
+            d="M16 5.5C10.2 5.5 5.5 10.2 5.5 16c0 1.9.5 3.7 1.4 5.2L5.5 26.5l5.4-1.4c1.5.8 3.2 1.3 5.1 1.3C21.8 26.4 26.5 21.7 26.5 16S21.8 5.5 16 5.5z"
+          />
+
+          <!-- Layer 3: white handset — always white, on top of the bubble color -->
+          <path id="__wa_fill_handset"
+            fill="white"
+            opacity="0"
+            d="M21.2 18.8c-.3-.15-1.8-.88-2.07-.98c-.28-.1-.48-.15-.68.15c-.2.3-.78.98-.96 1.18c-.18.2-.35.22-.65.07c-.3-.15-1.27-.47-2.42-1.5c-.9-.8-1.5-1.78-1.68-2.08c-.18-.3-.02-.46.13-.61c.14-.13.3-.35.45-.52c.15-.18.2-.3.3-.5c.1-.2.05-.37-.02-.52c-.08-.15-.68-1.63-.93-2.24c-.24-.58-.49-.5-.68-.51c-.18-.01-.37-.01-.57-.01c-.2 0-.52.07-.8.37c-.28.3-1.06 1.03-1.06 2.52c0 1.48 1.08 2.91 1.23 3.11c.15.2 2.13 3.24 5.16 4.55c.72.31 1.28.5 1.72.63c.72.23 1.38.2 1.9.12c.58-.09 1.78-.73 2.03-1.43c.25-.7.25-1.3.17-1.43c-.07-.13-.27-.2-.57-.35z"
+          />
+
+          <!-- Layer 4: stroke paths drawn on top, fade out after fill appears -->
+          <circle class="wa-circle" id="__wa_circle" cx="16" cy="16" r="14.5"/>
+
+          <path class="wa-path" id="__wa_path"
+            d="M16 5.5C10.2 5.5 5.5 10.2 5.5 16c0 1.9.5 3.7 1.4 5.2L5.5 26.5l5.4-1.4c1.5.8 3.2 1.3 5.1 1.3C21.8 26.4 26.5 21.7 26.5 16S21.8 5.5 16 5.5z"
+          />
+          <path class="wa-path" id="__wa_path2"
+            d="M21.2 18.8c-.3-.15-1.8-.88-2.07-.98c-.28-.1-.48-.15-.68.15c-.2.3-.78.98-.96 1.18c-.18.2-.35.22-.65.07c-.3-.15-1.27-.47-2.42-1.5c-.9-.8-1.5-1.78-1.68-2.08c-.18-.3-.02-.46.13-.61c.14-.13.3-.35.45-.52c.15-.18.2-.3.3-.5c.1-.2.05-.37-.02-.52c-.08-.15-.68-1.63-.93-2.24c-.24-.58-.49-.5-.68-.51c-.18-.01-.37-.01-.57-.01c-.2 0-.52.07-.8.37c-.28.3-1.06 1.03-1.06 2.52c0 1.48 1.08 2.91 1.23 3.11c.15.2 2.13 3.24 5.16 4.55c.72.31 1.28.5 1.72.63c.72.23 1.38.2 1.9.12c.58-.09 1.78-.73 2.03-1.43c.25-.7.25-1.3.17-1.43c-.07-.13-.27-.2-.57-.35z"
+          />
+
+        </svg>
+      </div>
+
+      <div class="wa-cursor" id="__wa_cursor"></div>
+      <div class="wa-number" id="__wa_number"></div>
+
+    </div>
+  </div>
+
+<script>
+(function () {
+  const rowEl       = document.getElementById('__wa_row');
+  const txtEl       = document.getElementById('__txt_el');
+  const numberEl    = document.getElementById('__wa_number');
+  const cursorEl    = document.getElementById('__wa_cursor');
+
+  const circle      = document.getElementById('__wa_circle');
+  const pathEl      = document.getElementById('__wa_path');
+  const path2El     = document.getElementById('__wa_path2');
+  const fillCompound  = document.getElementById('__wa_fill_compound');
+  const fillHandset   = document.getElementById('__wa_fill_handset');
+  const fillBg        = document.getElementById('__wa_fill_bg');
+
+  const rings = [
+    document.getElementById('__ring1'),
+    document.getElementById('__ring2'),
+    document.getElementById('__ring3')
+  ];
+
+  let DUR = Number({{duration}}) || 5;
+  let OUT = Math.min(0.5, DUR * 0.10);
+
+  function recalcTiming() {
+    OUT = Math.min(0.5, DUR * 0.10);
+  }
+
+  function normalizeTime(t) {
+    t = Number(t);
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+  }
+
+  let rawText = txtEl.textContent.trim();
+  let chars   = [];
+
+  function buildChars() {
+    rawText = txtEl.textContent.trim();
+    numberEl.innerHTML = '';
+    chars = [];
+    for (let i = 0; i < rawText.length; i++) {
+      const span = document.createElement('span');
+      span.className = 'char';
+      span.textContent = rawText[i] === '\n' ? ' ' : rawText[i];
+      numberEl.appendChild(span);
+      chars.push(span);
+    }
+  }
+
+  buildChars();
+
+  const P_CIRCLE_START  = 0.00;
+  const P_CIRCLE_DUR    = 0.45;
+  const P_PATH_START    = 0.28;
+  const P_PATH_DUR      = 0.44;
+  const P_FILL_START    = 0.70;
+  const P_FILL_DUR      = 0.25;
+  const P_RING_START    = 0.82;
+  const RING_DUR        = 0.7;
+  const RING_STAGGER    = 0.22;
+  const P_CURSOR_START  = 0.88;
+  const CURSOR_DUR      = 0.2;
+  const P_CHARS_START   = 0.96;
+  const CHAR_DUR        = 0.30;
+  const CHAR_STAGGER    = 0.07;
+
+  const P_STROKE_FADE_START = P_FILL_START + P_FILL_DUR * 0.4;
+  const P_FILL_END          = P_FILL_START + P_FILL_DUR;
+
+  function easeOut(x) { return 1 - Math.pow(1 - x, 3); }
+
+  function applyStroke(el, dashLen, animDur, startT, curT) {
+    const elapsed = curT - startT;
+    if (elapsed < 0) { el.style.strokeDashoffset = dashLen; el.style.opacity = '0'; return; }
+    if (elapsed >= animDur) { el.style.strokeDashoffset = '0'; el.style.opacity = '1'; return; }
+    const prog = easeOut(elapsed / animDur);
+    el.style.strokeDashoffset = dashLen * (1 - prog);
+    el.style.opacity = '1';
+  }
+
+  function applyRing(ringEl, animDur, startT, curT) {
+    const elapsed = curT - startT;
+    if (elapsed < 0 || elapsed >= animDur) {
+      ringEl.style.opacity = '0';
+      ringEl.style.transform = 'translate(-50%,-50%) scale(1)';
+      return;
+    }
+    const prog  = elapsed / animDur;
+    const eased = 1 - Math.pow(1 - prog, 2);
+    ringEl.style.opacity   = String((1 - prog) * 0.7);
+    ringEl.style.transform = `translate(-50%,-50%) scale(${1 + eased * 1.2})`;
+  }
+
+  function applyChar(charEl, charDur, startT, curT) {
+    const elapsed = curT - startT;
+    if (elapsed < 0) {
+      charEl.style.opacity   = '0';
+      charEl.style.transform = 'translateY(24px) rotate(-4deg)';
+      charEl.style.filter    = 'blur(4px)';
+      return;
+    }
+    if (elapsed >= charDur) {
+      charEl.style.opacity   = '1';
+      charEl.style.transform = 'translateY(0) rotate(0deg)';
+      charEl.style.filter    = 'blur(0)';
+      return;
+    }
+    const prog = elapsed / charDur;
+    if (prog < 0.6) {
+      const e   = easeOut(prog / 0.6);
+      charEl.style.opacity   = String(e);
+      charEl.style.transform = `translateY(${24*(1-e)}px) rotate(${-4*(1-e)}deg)`;
+      charEl.style.filter    = `blur(${4*(1-e)}px)`;
+    } else {
+      const over = Math.sin(((prog - 0.6) / 0.4) * Math.PI) * -3;
+      charEl.style.opacity   = '1';
+      charEl.style.transform = `translateY(${over}px) rotate(0deg)`;
+      charEl.style.filter    = 'blur(0)';
+    }
+  }
+
+  function applyCursor(curT) {
+    const elapsed = curT - P_CURSOR_START;
+    if (elapsed < 0) { cursorEl.style.opacity = '0'; return; }
+    if (elapsed >= CURSOR_DUR) {
+      const blinkT = (curT - (P_CURSOR_START + CURSOR_DUR)) % 0.9;
+      cursorEl.style.opacity = blinkT < 0.45 ? '1' : '0';
+      return;
+    }
+    cursorEl.style.opacity = String(elapsed / CURSOR_DUR);
+  }
+
+  function applyIconFill(curT) {
+    const elapsed = curT - P_FILL_START;
+
+    if (elapsed < 0) {
+      fillCompound.style.opacity = '0';
+      fillHandset.style.opacity  = '0';
+      fillBg.style.opacity       = '0';
+      return;
+    }
+
+    // All fill layers animate in together
+    if (elapsed >= P_FILL_DUR) {
+      fillBg.style.opacity       = '1';
+      fillCompound.style.opacity = '1';
+      fillHandset.style.opacity  = '1';
+    } else {
+      const prog = easeOut(elapsed / P_FILL_DUR);
+      fillBg.style.opacity       = String(prog);
+      fillCompound.style.opacity = String(prog);
+      fillHandset.style.opacity  = String(prog);
+    }
+
+    // Strokes fade out as fill comes in
+    if (curT < P_STROKE_FADE_START) return;
+
+    if (curT >= P_FILL_END) {
+      circle.style.opacity  = '0';
+      pathEl.style.opacity  = '0';
+      path2El.style.opacity = '0';
+      return;
+    }
+
+    const fadeRange = P_FILL_END - P_STROKE_FADE_START;
+    const strokeOp  = Math.max(0, 1 - (curT - P_STROKE_FADE_START) / fadeRange);
+    circle.style.opacity  = String(strokeOp);
+    pathEl.style.opacity  = String(strokeOp);
+    path2El.style.opacity = String(strokeOp);
+  }
+
+  function clearAll() {
+    rowEl.style.animation           = '';
+    rowEl.style.animationDelay      = '';
+    rowEl.style.animationPlayState  = '';
+    rings.forEach(r => { r.style.animation = ''; });
+  }
+
+  function reportSize() {
+    const r = txtEl.getBoundingClientRect();
+    if (r.width < 1) { setTimeout(reportSize, 50); return; }
+  }
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: 30
+    },
+    whenReady() { return Promise.resolve(); },
+    setDuration(d) {
+      d = Number(d);
+      if (Number.isFinite(d) && d > 0) { DUR = d; recalcTiming(); }
+    },
+    seek(t) {
+      t = normalizeTime(t);
+      clearAll();
+
+      if (t <= 0) {
+        rowEl.style.opacity            = '0';
+        circle.style.strokeDashoffset  = '200';
+        circle.style.opacity           = '0';
+        pathEl.style.strokeDashoffset  = '300';
+        pathEl.style.opacity           = '0';
+        path2El.style.strokeDashoffset = '300';
+        path2El.style.opacity          = '0';
+        fillCompound.style.opacity     = '0';
+        fillHandset.style.opacity      = '0';
+        fillBg.style.opacity           = '0';
+        cursorEl.style.opacity         = '0';
+        rings.forEach(r => { r.style.opacity = '0'; });
+        chars.forEach(c => { c.style.opacity = '0'; });
+        return;
+      }
+
+      if (t >= DUR - OUT) {
+        rowEl.style.opacity            = '1';
+        const tOut = t - (DUR - OUT);
+        rowEl.style.animation          = 'ms_out ' + OUT + 's ease forwards';
+        rowEl.style.animationDelay     = (-tOut) + 's';
+        rowEl.style.animationPlayState = 'paused';
+        return;
+      }
+
+      rowEl.style.opacity = '1';
+
+      // Stroke draw (only apply if not yet faded — applyIconFill will override after fill starts)
+      applyStroke(circle,  200, P_CIRCLE_DUR, P_CIRCLE_START,      t);
+      applyStroke(pathEl,  300, P_PATH_DUR,   P_PATH_START,        t);
+      applyStroke(path2El, 300, P_PATH_DUR,   P_PATH_START + 0.08, t);
+
+      // Fill + stroke fade (applyIconFill overrides stroke opacity when fill phase starts)
+      applyIconFill(t);
+
+      rings.forEach((r, i) => applyRing(r, RING_DUR, P_RING_START + i * RING_STAGGER, t));
+      applyCursor(t);
+      chars.forEach((c, i) => applyChar(c, CHAR_DUR, P_CHARS_START + i * CHAR_STAGGER, t));
+    }
+  };
+
+  window.Motion.seek(0);
+
+  if (document.fonts?.ready) { document.fonts.ready.then(reportSize); }
+  else { setTimeout(reportSize, 120); }
+  window.addEventListener('resize', reportSize);
+  window.__reportTextSize = reportSize;
+})();
+</script>
+</body>
+</html>

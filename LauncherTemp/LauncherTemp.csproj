@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+
+    <AssemblyName>Motion Studio</AssemblyName>
+    <RootNamespace>MotionStudio</RootNamespace>
+
+    <ApplicationIcon>..\Motion Studio.ico</ApplicationIcon>
+  </PropertyGroup>
+</Project>

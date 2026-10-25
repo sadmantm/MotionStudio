@@ -1,0 +1,21 @@
+# Segredos e artefatos locais
+config/ai.local.json
+.DS_Store
+.vscode/
+
+# Dependencias e ambientes
+node_modules/
+venv/
+.venv/
+.whisper-env/
+
+# Modelos (whisper / huggingface)
+models/
+
+# Binarios baixados e builds
+.bin/
+dist/
+tmp/
+desktop/.cache/
+LauncherTemp/bin/
+LauncherTemp/obj/

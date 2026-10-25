@@ -1,0 +1,22 @@
+{
+    "name": "motion-studio",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "start": "node starter.js",
+        "desktop": "node desktop/launcher.js",
+        "desktop:build": "node desktop/build.js"
+    },
+    "dependencies": {
+        "cors": "^2.8.6",
+        "express": "^5.2.1",
+        "ffmpeg-static": "^5.2.0",
+        "puppeteer": "^24.40.0",
+        "web-video-creator": "^0.0.34"
+    },
+    "devDependencies": {
+        "postject": "^1.0.0-alpha.6",
+        "resedit": "^2.0.3"
+    }
+}

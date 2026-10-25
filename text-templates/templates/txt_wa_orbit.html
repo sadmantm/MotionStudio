@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+    font-family: {{fontFamily}};
+  }
+
+  .text-stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: {{bg}};
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #__txt_el {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    font-size: 1px;
+    color: transparent;
+  }
+
+  .wa-row {
+    display: flex;
+    align-items: center;
+    gap: calc({{fontSize}}px * 0.42);
+    opacity: 0;
+    will-change: transform, opacity, filter;
+  }
+
+  .wa-icon-wrap {
+    position: relative;
+    flex-shrink: 0;
+    width:  calc({{fontSize}}px * 1.1);
+    height: calc({{fontSize}}px * 1.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wa-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+  }
+
+  .orbit-canvas {
+    position: absolute;
+    inset: -30%;
+    pointer-events: none;
+  }
+
+  .wa-sep {
+    width: 2px;
+    height: calc({{fontSize}}px * 0.9);
+    background: {{color}};
+    border-radius: 2px;
+    opacity: 0;
+    transform: scaleY(0);
+    transform-origin: center center;
+    will-change: transform, opacity;
+    flex-shrink: 0;
+  }
+
+  .wa-number {
+    text-shadow:
+      -1px -1px 0 white,
+       1px -1px 0 white,
+      -1px  1px 0 white,
+       1px  1px 0 white,
+      -2px  0   0 white,
+       2px  0   0 white,
+       0   -2px 0 white,
+       0    2px 0 white;
+    font-family: 'Unbounded', {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: 700;
+    color: {{color}};
+    letter-spacing: 0.02em;
+    line-height: 1;
+    white-space: nowrap;
+    /*
+      FIX: Use display:flex so char spans don't affect baseline/inline flow.
+      Each .char gets an explicit width set by JS = widest digit in that slot.
+    */
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .wa-number .char {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    will-change: transform, opacity, filter;
+    opacity: 0;
+    overflow: hidden;
+    /* width is set per-char by JS */
+  }
+
+  @keyframes ms_in {
+    0%   { opacity: 0; }
+    100% { opacity: 1; }
+  }
+
+  @keyframes ms_out {
+    0%   { opacity: 1; transform: scale(1);    filter: blur(0); }
+    40%  { opacity: 0.8; transform: scale(1.04); filter: blur(0); }
+    100% { opacity: 0; transform: scale(0.88); filter: blur(10px); }
+  }
+</style>
+</head>
+<body>
+  <div class="text-stage">
+
+    <div id="__txt_el">{{text}}</div>
+
+    <div class="wa-row" id="__wa_row">
+
+      <div class="wa-icon-wrap" id="__icon_wrap">
+        <canvas class="orbit-canvas" id="__orbit_canvas"></canvas>
+
+        <svg class="wa-svg" id="__wa_svg" viewBox="0 0 32 32"
+             xmlns="http://www.w3.org/2000/svg"
+             style="opacity:0; transform: scale(0) rotate(-180deg);">
+          <!-- White base circle for contrast -->
+          <circle cx="16" cy="16" r="15.5" fill="white"/>
+          <!-- Colored bubble -->
+          <path fill="{{color}}" d="M16 5.2C10 5.2 5.2 10 5.2 16c0 2.1.6 4.1 1.6 5.7L5.2 26.8l5.2-1.5c1.6.9 3.4 1.4 5.4 1.4c6 0 10.8-4.8 10.8-10.8S22 5.2 16 5.2z"/>
+          <!-- White handset on top of bubble -->
+          <path fill="white" d="M21.5 19c-.3.8-1.5 1.4-2.1 1.5c-.5.1-1.2.1-1.9-.1c-.4-.1-1-.3-1.8-.7c-3.1-1.3-5.1-4.4-5.3-4.6c-.1-.2-1.2-1.6-1.2-3.1s.8-2.2 1.1-2.5c.3-.3.6-.4.8-.4c.2 0 .4 0 .6.01c.2.01.47-.01.69.52c.23.57.8 1.97.87 2.12c.07.15.12.32.02.52c-.1.2-.15.32-.3.5c-.15.17-.32.38-.45.51c-.15.15-.3.3-.13.6c.18.3.8 1.3 1.7 2.1c1.17 1.04 2.15 1.36 2.45 1.51c.3.15.47.13.65-.07c.18-.2.76-.9.97-1.19c.2-.3.41-.25.68-.15c.28.1 1.77.83 2.07.98c.3.15.5.22.57.35c.07.13.07.73-.22 1.5z"/>
+          <!-- Colored border ring -->
+          <circle cx="16" cy="16" r="15.5" fill="none" stroke="{{color}}" stroke-width="1.2"/>
+        </svg>
+      </div>
+
+      <div class="wa-sep" id="__sep"></div>
+      <div class="wa-number" id="__wa_number"></div>
+
+    </div>
+  </div>
+
+<script>
+(function () {
+  const rowEl    = document.getElementById('__wa_row');
+  const txtEl    = document.getElementById('__txt_el');
+  const numberEl = document.getElementById('__wa_number');
+  const sepEl    = document.getElementById('__sep');
+  const iconSvg  = document.getElementById('__wa_svg');
+  const canvas   = document.getElementById('__orbit_canvas');
+  const ctx      = canvas.getContext('2d');
+
+  let DUR = Number({{duration}}) || 5;
+  let OUT = Math.min(0.5, DUR * 0.10);
+
+  function recalcTiming() {
+    OUT = Math.min(0.5, DUR * 0.10);
+  }
+
+  function normalizeTime(t) {
+    t = Number(t);
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+  }
+
+  let rawText = txtEl.textContent.trim();
+  let chars   = [];
+  const DIGITS = '0123456789';
+
+  function buildChars() {
+    rawText = txtEl.textContent.trim();
+    numberEl.innerHTML = '';
+    chars = [];
+    for (let i = 0; i < rawText.length; i++) {
+      const span = document.createElement('span');
+      span.className = 'char';
+      span.dataset.real = rawText[i];
+      span.dataset.idx  = i;
+      span.textContent  = rawText[i];
+      numberEl.appendChild(span);
+      chars.push(span);
+    }
+  }
+
+  buildChars();
+
+  /*
+    FIX: Lock char widths to prevent reflow during scramble.
+
+    Problem: Unbounded is a proportional font — '1' is narrower than '8'.
+    When the scramble swaps digits, the span width changes → the whole row shifts.
+
+    Solution: Use Canvas measureText() to find the widest digit for this font/size,
+    then set each .char span to that exact width.
+    This way all digit positions are always the same width, regardless of what character
+    is currently displayed.
+
+    We use Canvas because getBoundingClientRect() on DOM elements can be unreliable
+    before the first paint or while opacity:0. Canvas measureText() reads font metrics
+    directly without needing visible DOM elements.
+  */
+  function measureWidestDigitCanvas(fontSpec) {
+    const mc = document.createElement('canvas');
+    const mctx = mc.getContext('2d');
+    mctx.font = fontSpec;
+    let max = 0;
+    for (let d = 0; d <= 9; d++) {
+      const w = mctx.measureText(String(d)).width;
+      if (w > max) max = w;
+    }
+    // Also measure common non-digit chars (spaces, +, -, (, ))
+    for (const ch of [' ', '+', '-', '(', ')', '.']) {
+      const w = mctx.measureText(ch).width;
+      if (w > max) max = w;
+    }
+    return Math.ceil(max);
+  }
+
+  function lockCharWidths() {
+    const fs = {{fontSize}};
+    // Font spec must match the CSS: font-weight size family
+    // We try both the loaded font and a fallback
+    const fontSpec = `700 ${fs}px Unbounded, sans-serif`;
+    const wideWidth = measureWidestDigitCanvas(fontSpec);
+
+    chars.forEach(c => {
+      const real = c.dataset.real;
+      const isDigit = /[0-9]/.test(real);
+      if (isDigit) {
+        // Use the widest digit width for all digit slots
+        c.style.width = wideWidth + 'px';
+      } else {
+        // For non-digits, measure that specific char
+        const mc = document.createElement('canvas');
+        const mctx = mc.getContext('2d');
+        mctx.font = fontSpec;
+        const w = Math.ceil(mctx.measureText(real).width);
+        c.style.width = w + 'px';
+      }
+    });
+  }
+
+  // ---- Canvas sizing ----
+  function resizeCanvas() {
+    const wrap = document.getElementById('__icon_wrap');
+    const w = wrap.offsetWidth * 1.6;
+    const h = wrap.offsetHeight * 1.6;
+    canvas.width  = w;
+    canvas.height = h;
+  }
+
+  // ---- Easing helpers ----
+  function easeOutBack(x) {
+    const c1 = 1.70158, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  }
+
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeInOutCubic(x) {
+    return x < 0.5 ? 4*x*x*x : 1 - Math.pow(-2*x+2, 3)/2;
+  }
+
+  const NUM_PARTICLES = 7;
+
+  function drawOrbit(t) {
+    canvas.width = canvas.width;
+    if (t <= 0 || t >= 1) return;
+
+    const cx = canvas.width  / 2;
+    const cy = canvas.height / 2;
+    const maxR = canvas.width * 0.42;
+    const minR = canvas.width * 0.08;
+    const r    = maxR - (maxR - minR) * easeInOutCubic(t);
+    const alpha = t < 0.7 ? 0.85 : 0.85 * (1 - (t - 0.7) / 0.3);
+
+    for (let i = 0; i < NUM_PARTICLES; i++) {
+      const baseAngle = (i / NUM_PARTICLES) * Math.PI * 2;
+      const angle = baseAngle + t * Math.PI * 4;
+      const px = cx + Math.cos(angle) * r;
+      const py = cy + Math.sin(angle) * r;
+      const pSize = 4 * (1 - t * 0.5);
+
+      ctx.beginPath();
+      ctx.arc(px, py, pSize, 0, Math.PI * 2);
+      ctx.fillStyle = hexToRgba('{{color}}', alpha);
+      ctx.fill();
+
+      const trailAngle = angle - 0.3;
+      const trail = { x: cx + Math.cos(trailAngle) * r, y: cy + Math.sin(trailAngle) * r };
+      const grad = ctx.createLinearGradient(trail.x, trail.y, px, py);
+      grad.addColorStop(0, hexToRgba('{{color}}', 0));
+      grad.addColorStop(1, hexToRgba('{{color}}', alpha * 0.5));
+      ctx.beginPath();
+      ctx.moveTo(trail.x, trail.y);
+      ctx.lineTo(px, py);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = pSize * 0.8;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+  }
+
+  function hexToRgba(hex, a) {
+    hex = hex.replace('#','');
+    if (hex.length === 3) hex = hex.split('').map(x=>x+x).join('');
+    const r = parseInt(hex.slice(0,2),16);
+    const g = parseInt(hex.slice(2,4),16);
+    const b = parseInt(hex.slice(4,6),16);
+    return `rgba(${r},${g},${b},${a.toFixed(3)})`;
+  }
+
+  const CHARS_START  = 0.55;
+  const CHAR_STAGGER = 0.06;
+  const SCRAMBLE_DUR = 0.32;
+
+  function applyScramble(charEl, charStartT, curT) {
+    const real    = charEl.dataset.real;
+    const isDigit = /[0-9]/.test(real);
+    const elapsed = curT - charStartT;
+
+    if (elapsed < 0) {
+      charEl.style.opacity = '0';
+      charEl.style.filter  = 'blur(6px)';
+      charEl.textContent   = real;
+      return;
+    }
+
+    if (elapsed >= SCRAMBLE_DUR) {
+      charEl.style.opacity = '1';
+      charEl.style.filter  = 'blur(0)';
+      charEl.textContent   = real;
+      return;
+    }
+
+    const prog = elapsed / SCRAMBLE_DUR;
+    charEl.style.opacity = String(easeOutCubic(prog));
+    charEl.style.filter  = `blur(${(1-prog)*3}px)`;
+
+    if (isDigit && prog < 0.72) {
+      const steps = Math.floor((elapsed / SCRAMBLE_DUR) * 8);
+      const scrambleIdx = (steps * 3 + Number(charEl.dataset.idx) * 7) % DIGITS.length;
+      charEl.textContent = DIGITS[scrambleIdx];
+    } else {
+      charEl.textContent = real;
+    }
+  }
+
+  const ICON_START = 0.00;
+  const ICON_DUR   = 0.52;
+  const ORBIT_END  = ICON_DUR;
+
+  function applyIcon(curT) {
+    const elapsed = curT - ICON_START;
+    if (elapsed < 0) {
+      iconSvg.style.opacity   = '0';
+      iconSvg.style.transform = 'scale(0) rotate(-180deg)';
+      iconSvg.style.filter    = 'blur(12px)';
+      return;
+    }
+    if (elapsed >= ICON_DUR) {
+      iconSvg.style.opacity   = '1';
+      iconSvg.style.transform = 'scale(1) rotate(0deg)';
+      iconSvg.style.filter    = 'blur(0)';
+      return;
+    }
+    const prog  = elapsed / ICON_DUR;
+    const scale = Math.max(0, easeOutBack(prog));
+    iconSvg.style.opacity   = String(Math.min(1, prog * 2));
+    iconSvg.style.transform = `scale(${scale}) rotate(${-180 * (1 - prog)}deg)`;
+    iconSvg.style.filter    = `blur(${Math.max(0, 12 * (1 - prog * 1.5))}px)`;
+  }
+
+  const SEP_START = 0.48;
+  const SEP_DUR   = 0.20;
+
+  function applySep(curT) {
+    const elapsed = curT - SEP_START;
+    if (elapsed < 0) { sepEl.style.opacity = '0'; sepEl.style.transform = 'scaleY(0)'; return; }
+    if (elapsed >= SEP_DUR) { sepEl.style.opacity = '1'; sepEl.style.transform = 'scaleY(1)'; return; }
+    const prog = elapsed / SEP_DUR;
+    sepEl.style.opacity   = String(Math.min(1, prog * 3));
+    sepEl.style.transform = `scaleY(${Math.max(0, easeOutBack(prog))})`;
+  }
+
+  function clearAll() {
+    rowEl.style.animation           = '';
+    rowEl.style.animationDelay      = '';
+    rowEl.style.animationPlayState  = '';
+    iconSvg.style.opacity           = '0';
+    iconSvg.style.transform         = 'scale(0) rotate(-180deg)';
+    iconSvg.style.filter            = 'blur(12px)';
+    sepEl.style.opacity             = '0';
+    sepEl.style.transform           = 'scaleY(0)';
+    chars.forEach(c => { c.style.opacity = '0'; });
+    canvas.width = canvas.width;
+  }
+
+  function reportSize() {
+    const r = txtEl.getBoundingClientRect();
+    if (r.width < 1) { setTimeout(reportSize, 50); return; }
+  }
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: 30
+    },
+    whenReady() { return Promise.resolve(); },
+    setDuration(d) {
+      d = Number(d);
+      if (Number.isFinite(d) && d > 0) { DUR = d; recalcTiming(); }
+    },
+    seek(t) {
+      t = normalizeTime(t);
+      clearAll();
+
+      if (t <= 0) {
+        rowEl.style.opacity = '0';
+        return;
+      }
+
+      if (t >= DUR - OUT) {
+        rowEl.style.opacity            = '1';
+        const tOut = t - (DUR - OUT);
+        rowEl.style.animation          = 'ms_out ' + OUT + 's cubic-bezier(0.4,0,1,1) forwards';
+        rowEl.style.animationDelay     = (-tOut) + 's';
+        rowEl.style.animationPlayState = 'paused';
+        return;
+      }
+
+      rowEl.style.opacity = '1';
+
+      resizeCanvas();
+      drawOrbit(Math.min(1, t / ORBIT_END));
+      applyIcon(t);
+      applySep(t);
+      chars.forEach((c, i) => applyScramble(c, CHARS_START + i * CHAR_STAGGER, t));
+    }
+  };
+
+  window.Motion.seek(0);
+
+  /*
+    Lock char widths immediately (Canvas measureText doesn't need the font loaded in DOM).
+    Also re-lock after fonts load in case Canvas gets more accurate metrics.
+  */
+  lockCharWidths();
+
+  if (document.fonts?.ready) {
+    document.fonts.ready.then(() => {
+      lockCharWidths(); // re-measure with loaded font
+      reportSize();
+    });
+  } else {
+    setTimeout(() => { lockCharWidths(); reportSize(); }, 300);
+  }
+
+  window.addEventListener('resize', reportSize);
+  window.__reportTextSize = reportSize;
+})();
+</script>
+</body>
+</html>

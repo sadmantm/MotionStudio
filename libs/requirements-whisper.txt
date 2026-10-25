@@ -1,0 +1,6 @@
+# Motor de transcrição (sem torch — roda em Windows, macOS Intel/Apple Silicon e Linux)
+faster-whisper>=1.1.0
+numpy
+
+# Opcional (só Windows/Linux com Python 3.10+): melhora o tempo das palavras com wav2vec2.
+# Instale manualmente se quiser: pip install whisperx

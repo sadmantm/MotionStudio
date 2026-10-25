@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Especificação — Video HTML (Motion Template)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:        #0d0f0b;
+    --surface:   #14170f;
+    --surface-2: #1b1f14;
+    --line:      #262b1c;
+    --text:      #e7ecdf;
+    --muted:     #8b9280;
+    --accent:    #82ea00;
+    --danger:    #ff5d5d;
+    --warn:      #ffb454;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} }
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:Inter,system-ui,sans-serif;
+    font-size:16px;
+    line-height:1.65;
+  }
+  .wrap{max-width:900px;margin:0 auto;padding:0 24px 120px}
+
+  /* ── Header ─────────────────────────────────────────── */
+  header{
+    padding:72px 0 40px;
+    border-bottom:1px solid var(--line);
+    margin-bottom:8px;
+  }
+  .kicker{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px;
+    letter-spacing:.18em;
+    color:var(--accent);
+    text-transform:uppercase;
+    margin-bottom:16px;
+  }
+  h1{
+    font-family:'Space Grotesk',sans-serif;
+    font-weight:700;
+    font-size:clamp(30px,5vw,46px);
+    line-height:1.08;
+    letter-spacing:-.02em;
+  }
+  h1 em{font-style:normal;color:var(--accent)}
+  .lede{
+    margin-top:18px;
+    max-width:640px;
+    color:var(--muted);
+    font-size:17px;
+  }
+  .lede strong{color:var(--text);font-weight:600}
+
+  /* ── Timecode sections ──────────────────────────────── */
+  section{padding:52px 0 8px;border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:none}
+  .tc{
+    display:flex;align-items:baseline;gap:14px;margin-bottom:20px;
+  }
+  .tc .stamp{
+    font-family:'JetBrains Mono',monospace;
+    font-size:13px;color:var(--accent);
+    background:var(--surface);
+    border:1px solid var(--line);
+    padding:3px 9px;border-radius:4px;
+    white-space:nowrap;
+  }
+  h2{
+    font-family:'Space Grotesk',sans-serif;
+    font-weight:700;font-size:24px;letter-spacing:-.01em;
+  }
+  h3{
+    font-family:'Space Grotesk',sans-serif;
+    font-weight:500;font-size:17px;
+    margin:28px 0 10px;color:var(--text);
+  }
+  p{margin:0 0 14px;max-width:72ch}
+  p.muted{color:var(--muted)}
+  code{
+    font-family:'JetBrains Mono',monospace;
+    font-size:.86em;
+    background:var(--surface-2);
+    border:1px solid var(--line);
+    padding:1px 6px;border-radius:4px;
+    color:var(--accent);
+    white-space:nowrap;
+  }
+  pre{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:20px;
+    overflow-x:auto;
+    margin:16px 0 22px;
+    font-size:13px;
+    line-height:1.6;
+    tab-size:2;
+  }
+  pre code{
+    background:none;border:none;padding:0;color:var(--text);white-space:pre;
+  }
+
+  /* ── Contract table ─────────────────────────────────── */
+  table{width:100%;border-collapse:collapse;margin:16px 0 22px;font-size:14.5px}
+  th,td{padding:11px 14px;border:1px solid var(--line);text-align:left;vertical-align:top}
+  th{
+    font-family:'Space Grotesk',sans-serif;font-weight:500;
+    background:var(--surface);color:var(--muted);
+    font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;
+  }
+  td:first-child{white-space:nowrap}
+  .req{color:var(--accent);font-weight:600;font-size:12px}
+  .opt{color:var(--muted);font-weight:600;font-size:12px}
+
+  /* ── Do / Don't ─────────────────────────────────────── */
+  .rules{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:18px 0 24px}
+  @media(max-width:680px){.rules{grid-template-columns:1fr}}
+  .rule-col{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:8px;padding:18px 20px;
+  }
+  .rule-col h4{
+    font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px;
+  }
+  .rule-col.ok h4{color:var(--accent)}
+  .rule-col.bad h4{color:var(--danger)}
+  .rule-col ul{list-style:none}
+  .rule-col li{
+    padding:7px 0 7px 22px;position:relative;font-size:14.5px;
+    border-bottom:1px dashed var(--line);
+  }
+  .rule-col li:last-child{border-bottom:none}
+  .rule-col.ok li::before{content:"✓";position:absolute;left:0;color:var(--accent);font-weight:700}
+  .rule-col.bad li::before{content:"✕";position:absolute;left:0;color:var(--danger);font-weight:700}
+
+  .callout{
+    border-left:3px solid var(--accent);
+    background:var(--surface);
+    padding:14px 18px;border-radius:0 8px 8px 0;
+    margin:18px 0 22px;font-size:14.5px;
+  }
+  .callout.warn{border-left-color:var(--warn)}
+  .callout b{color:var(--text)}
+
+  .tokens{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 20px}
+  .tokens code{font-size:13px;padding:4px 10px}
+
+  /* ── Demo ───────────────────────────────────────────── */
+  .demo{
+    display:grid;grid-template-columns:auto 1fr;gap:26px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:10px;padding:24px;margin:18px 0 26px;
+    align-items:center;
+  }
+  @media(max-width:680px){.demo{grid-template-columns:1fr;justify-items:center}}
+  .demo-screen{
+    width:189px;height:336px; /* 1080x1920 ÷ ~5.7 */
+    border-radius:8px;overflow:hidden;
+    background:
+      linear-gradient(135deg,#1a2030 0%,#232b16 100%);
+    border:1px solid var(--line);
+    position:relative;flex:none;
+  }
+  .demo-screen iframe{
+    width:1080px;height:1920px;border:none;
+    transform:scale(0.175);transform-origin:0 0;
+    pointer-events:none;position:absolute;left:0;top:0;
+  }
+  .demo-ctrl label{
+    display:block;font-family:'JetBrains Mono',monospace;
+    font-size:12px;color:var(--muted);margin-bottom:10px;
+    letter-spacing:.08em;text-transform:uppercase;
+  }
+  .demo-ctrl input[type=range]{
+    width:100%;accent-color:var(--accent);cursor:pointer;
+  }
+  .readout{
+    margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:14px;
+  }
+  .readout b{color:var(--accent);font-weight:500}
+  .demo-note{margin-top:14px;font-size:13.5px;color:var(--muted);max-width:52ch}
+
+  /* ── Code header / copy ─────────────────────────────── */
+  .codeblock{position:relative}
+  .codehead{
+    display:flex;justify-content:space-between;align-items:center;
+    background:var(--surface-2);
+    border:1px solid var(--line);border-bottom:none;
+    border-radius:8px 8px 0 0;
+    padding:8px 16px;
+    font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);
+  }
+  .codehead + pre{border-radius:0 0 8px 8px;margin-top:0}
+  .codehead button{
+    background:none;border:1px solid var(--line);border-radius:5px;
+    color:var(--accent);font-family:inherit;font-size:12px;
+    padding:4px 12px;cursor:pointer;
+  }
+  .codehead button:hover{border-color:var(--accent)}
+  .codehead button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* ── Checklist ──────────────────────────────────────── */
+  ol.check{counter-reset:c;list-style:none;margin:14px 0 8px}
+  ol.check li{
+    counter-increment:c;position:relative;
+    padding:11px 0 11px 46px;border-bottom:1px dashed var(--line);
+    font-size:15px;
+  }
+  ol.check li::before{
+    content:counter(c,decimal-leading-zero);
+    position:absolute;left:0;top:11px;
+    font-family:'JetBrains Mono',monospace;font-size:13px;
+    color:var(--accent);
+  }
+  footer{
+    margin-top:64px;padding-top:24px;border-top:1px solid var(--line);
+    font-size:13px;color:var(--muted);
+    font-family:'JetBrains Mono',monospace;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Motion Studio · especificação do formato</div>
+  <h1>Video HTML: animação como <em>função do tempo</em></h1>
+  <p class="lede">Este documento define o contrato que todo template de vídeo deve seguir para funcionar no Motion Studio. A regra que governa tudo: <strong>o template nunca tem relógio próprio</strong>. O player informa o tempo; o template desenha exatamente aquele instante.</p>
+</header>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="conceito">
+  <div class="tc"><span class="stamp">00:00</span><h2>O que é um Video HTML</h2></div>
+  <p>Um Video HTML é <b>um único arquivo <code>.html</code> autocontido</b> (CSS e JS inline) que descreve uma animação com duração fixa. Ele é usado em dois ambientes com o mesmo mecanismo:</p>
+  <p><b>Preview (editor):</b> o arquivo roda num iframe. A timeline do editor envia o tempo atual e o template renderiza aquele instante.</p>
+  <p><b>Export (servidor):</b> um Chromium headless com relógio virtual captura frame a frame. Para cada frame, o renderizador chama <code>Motion.seek(t)</code> com o tempo exato daquele frame e fotografa o resultado. Os frames viram um MP4 via FFmpeg.</p>
+  <div class="callout">
+    <b>Consequência central:</b> a animação precisa ser <b>determinística</b>. Chamar <code>seek(2.5)</code> deve produzir o mesmo pixel sempre — não importa se foi chamado antes <code>seek(0)</code>, <code>seek(4)</code>, ou nada. Sem estado acumulado, sem dependência de tempo real.
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="contrato">
+  <div class="tc"><span class="stamp">00:01</span><h2>Contrato obrigatório: <code>window.Motion</code></h2></div>
+  <p>O template deve expor um objeto global <code>window.Motion</code> com esta interface:</p>
+  <table>
+    <thead><tr><th>Membro</th><th>Status</th><th>Descrição</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Motion.config</code></td><td><span class="req">OBRIGATÓRIO</span></td>
+        <td>Objeto com <code>fps</code> (número, ex. 60), <code>durationInSeconds</code> (número, ex. 5) e <code>totalFrames</code> (= <code>fps × durationInSeconds</code>). Define a duração nativa do clip na timeline.</td>
+      </tr>
+      <tr>
+        <td><code>Motion.seek(t)</code></td><td><span class="req">OBRIGATÓRIO</span></td>
+        <td>Recebe o tempo em <b>segundos</b> (float, 0 → durationInSeconds) e desenha exatamente aquele instante. Deve ser <b>pura e idempotente</b>: mesma entrada, mesmo visual, em qualquer ordem de chamada. Clampeie internamente valores fora do range.</td>
+      </tr>
+      <tr>
+        <td><code>Motion.renderFrame(f)</code></td><td><span class="req">OBRIGATÓRIO</span></td>
+        <td>Mesma coisa endereçada por índice de frame (inteiro). Implementação canônica: <code>seek(f / config.fps)</code>.</td>
+      </tr>
+      <tr>
+        <td><code>Motion.whenReady()</code></td><td><span class="req">OBRIGATÓRIO</span></td>
+        <td>Retorna uma <code>Promise</code> que resolve quando fontes e assets terminaram de carregar (ex.: <code>document.fonts.ready</code>). O player espera por ela antes do primeiro frame — evita capturar texto com fonte fallback.</td>
+      </tr>
+      <tr>
+        <td><code>Motion.init()</code></td><td><span class="opt">OPCIONAL</span></td>
+        <td>Preparação única (medições, criação de elementos). Se existir, o player chama uma vez antes do primeiro seek. Deve ser seguro chamar mais de uma vez.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Tokens literais exigidos pelo validador</h3>
+  <p class="muted">O servidor valida o arquivo por presença textual. Estes identificadores precisam aparecer <b>literalmente</b> no código (a implementação natural do contrato já os inclui):</p>
+  <div class="tokens">
+    <code>window.Motion</code><code>Motion.config</code><code>seek</code><code>renderFrame</code><code>whenReady</code><code>durationInSeconds</code><code>fps</code><code>totalFrames</code>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="determinismo">
+  <div class="tc"><span class="stamp">00:02</span><h2>Regras de determinismo</h2></div>
+  <div class="rules">
+    <div class="rule-col ok">
+      <h4>Permitido</h4>
+      <ul>
+        <li>Calcular todo estado visual dentro de <code>seek(t)</code> com funções de easing puras</li>
+        <li>Manipular <code>style</code>, <code>transform</code>, <code>opacity</code>, atributos SVG, canvas 2D/WebGL — desde que redesenhado por seek</li>
+        <li><code>Math.sin/cos</code> e ruído <b>derivados de t</b> (pseudo-aleatório com seed fixa)</li>
+        <li>Google Fonts via <code>&lt;link&gt;</code>; aguardar em <code>whenReady()</code></li>
+        <li>Imagens locais com caminho relativo <code>assets/nome.png</code></li>
+        <li><b>Bibliotecas externas</b> via CDN https com versão fixa (three.js, GSAP, anime.js, Lottie, PixiJS, D3…) — sempre dirigidas por <code>seek(t)</code></li>
+        <li><b>3D e WebGL</b>: modelos glTF/GLB, texturas, shaders, pós-processamento — renderizados dentro de <code>seek(t)</code></li>
+        <li>Imagens, modelos e dados por URL https (com CORS), carregados <b>antes</b> de <code>whenReady()</code> resolver</li>
+      </ul>
+    </div>
+    <div class="rule-col bad">
+      <h4>Proibido</h4>
+      <ul>
+        <li><code>requestAnimationFrame</code> ou <code>setInterval/setTimeout</code> autônomos dirigindo a animação</li>
+        <li><code>Date.now()</code> / <code>performance.now()</code> como fonte de tempo da animação</li>
+        <li><code>Math.random()</code> sem seed (cada frame sairia diferente entre preview e export)</li>
+        <li><code>transition</code> CSS dependente do estado anterior (seek fora de ordem quebra)</li>
+        <li>Tags <code>&lt;video&gt;</code>/<code>&lt;audio&gt;</code> dentro do template (mídia entra como clip separado na timeline)</li>
+        <li>Requests de rede <b>depois</b> que <code>whenReady()</code> resolveu (o export fotografa frames sem esperar downloads)</li>
+        <li>Loops próprios das bibliotecas dirigindo a animação: <code>renderer.setAnimationLoop</code>, <code>autoplay:true</code>, timelines tocando sozinhas, <code>clock.getDelta()</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn">
+    <b>Sobre CSS <code>@keyframes</code>:</b> o player consegue sincronizá-los externamente, mas o método preferido é sempre computar o estado em <code>seek(t)</code> via JS. Se usar keyframes, aplique <code>animation-play-state: paused</code> e nunca dependa deles para timing crítico.
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="bibliotecas">
+  <div class="tc"><span class="stamp">00:03</span><h2>Bibliotecas externas, efeitos e 3D</h2></div>
+  <p>Preview e export carregam scripts, módulos ES, modelos e texturas de CDNs públicas. Use <b>URLs https com versão fixa</b> de <code>cdn.jsdelivr.net</code>, <code>cdnjs.cloudflare.com</code> ou <code>unpkg.com</code> (evite esm.sh/skypack: usam imports absolutos que quebram). A regra continua a mesma: <b>a biblioteca nunca toca sozinha — <code>seek(t)</code> posiciona tudo</b>.</p>
+  <ul>
+    <li><b>three.js (3D)</b>: <code>&lt;script type="importmap"&gt;</code> apontando <code>"three"</code> para <code>https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js</code> e <code>"three/addons/"</code> para <code>…/three@0.160.0/examples/jsm/</code>; código em <code>&lt;script type="module"&gt;</code>. <code>new THREE.WebGLRenderer({ antialias:true, alpha:true, preserveDrawingBuffer:true })</code>, <code>setPixelRatio(1)</code>, <code>setSize(W,H)</code>. Em <code>seek(t)</code>: posicione câmera/objetos a partir de <code>t</code> e chame <code>renderer.render(scene, camera)</code>. Nunca <code>setAnimationLoop</code> nem <code>Clock</code>. Crie o renderer dentro de <code>try/catch</code>: sem WebGL no navegador (aceleração por hardware desligada), deixe <code>renderer = null</code>, pule o render 3D no <code>seek</code> e mantenha textos/2D animando — o erro nunca pode impedir que <code>window.Motion</code> seja definido.</li>
+    <li><b>Modelos glTF/GLB</b>: <code>GLTFLoader().loadAsync(url)</code> dentro da Promise de <code>whenReady()</code>. Animações do modelo: <code>mixer = new THREE.AnimationMixer(gltf.scene)</code>, <code>mixer.clipAction(clip).play()</code> e em <code>seek(t)</code> use <code>mixer.setTime(t)</code> (determinístico). Modelos de exemplo: <code>https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Models@master/2.0/&lt;Nome&gt;/glTF-Binary/&lt;Nome&gt;.glb</code> (Duck, Fox, BoxAnimated, DamagedHelmet, Avocado…). Sem modelo adequado, construa a cena com geometrias procedurais.</li>
+    <li><b>Shaders / efeitos WebGL</b>: <code>ShaderMaterial</code> com <code>uniforms.uTime.value = t</code>; pós-processamento (<code>EffectComposer</code>, bloom) chamando <code>composer.render()</code> dentro de <code>seek</code>.</li>
+    <li><b>GSAP</b>: <code>&lt;script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"&gt;</code>; <code>const tl = gsap.timeline({ paused:true })</code> e <code>seek(t) { tl.seek(t, false) }</code>.</li>
+    <li><b>anime.js</b>: <code>autoplay:false</code> e <code>anim.seek(t * 1000)</code>. <b>Lottie</b>: <code>lottie.loadAnimation({ autoplay:false, renderer:'svg', path:url })</code>, aguarde <code>'DOMLoaded'</code> no <code>whenReady</code> e use <code>anim.goToAndStop(t * 1000, false)</code>.</li>
+    <li><b>Canvas 2D / PixiJS / partículas</b>: calcule cada partícula como função de <code>t</code> e de uma seed fixa (PRNG tipo mulberry32), ou simule a física do zero até <code>t</code> com passo fixo. Nunca acumule estado entre chamadas de <code>seek</code>.</li>
+    <li><b>Efeitos CSS/SVG</b>: <code>filter</code>, <code>backdrop-filter</code>, <code>mix-blend-mode</code>, máscaras, <code>feTurbulence</code>/<code>feDisplacementMap</code> com atributos atualizados em <code>seek</code>. Use com moderação: blur grande em centenas de elementos deixa preview e export lentos.</li>
+  </ul>
+  <div class="callout warn">
+    <b>whenReady() é o portão do export:</b> ele só pode resolver depois que bibliotecas, modelos, texturas e fontes terminaram de carregar (e de preferência depois de um <code>seek(0)</code>). O export espera até ~45 s; o que chegar depois disso sai faltando nos primeiros frames.
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="sons">
+  <div class="tc"><span class="stamp">00:03</span><h2>Efeitos sonoros (opcional): <code>Motion.sfx</code></h2></div>
+  <p>Só quando o pedido incluir sons. O clipe <b>declara</b> os efeitos e o editor os sintetiza numa faixa de áudio sincronizada (com waveform, volume e export) — o HTML continua sem nenhum áudio próprio.</p>
+  <pre><code>window.Motion = {
+  config: CONFIG,
+  sfx: [
+    { t: 0.15, type: 'whoosh' },            // entrada do título
+    { t: 0.90, type: 'pop', gain: 0.6 },    // ícone surgindo
+    { t: 2.00, type: 'riser', dur: 1.2 },   // tensão até a revelação…
+    { t: 3.20, type: 'impact' },            // …que acontece aqui
+  ],
+  seek, renderFrame, whenReady,
+};</code></pre>
+  <ul>
+    <li><code>t</code>: segundos do clipe (mesmo relógio de <code>seek</code>). Opcionais: <code>gain</code> 0–1 (padrão 0.8), <code>pitch</code> (1 = normal), <code>pan</code> −1…1, <code>dur</code> em segundos.</li>
+    <li>Sintetizados (<code>type</code>): <code>whoosh</code>, <code>swipe</code>, <code>riser</code>, <code>impact</code>, <code>bass</code>, <code>pop</code>, <code>click</code>, <code>tick</code>, <code>typing</code>, <code>ding</code>, <code>chime</code>, <code>success</code>, <code>notification</code>, <code>coin</code>, <code>glitch</code>.</li>
+    <li>Biblioteca externa CC0 (<code>sound: "&lt;pacote&gt;/&lt;som&gt;"</code>, ex.: <code>"cinematic/achievement"</code>, <code>"glass/notification"</code>): sons reais gravados, 12 pacotes de estilo × 78 sons. O catálogo completo vem no pedido quando os sons estão ativados; use um único pacote no vídeo inteiro.</li>
+    <li>Um som por acontecimento visual relevante, alinhado ao instante exato do movimento; 3 a 10 por clipe costuma bastar.</li>
+    <li>Proibido: <code>&lt;audio&gt;</code>, WebAudio, Tone.js ou arquivos de som — o editor não os captura no export.</li>
+  </ul>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="layout">
+  <div class="tc"><span class="stamp">00:04</span><h2>Layout, resolução e transparência</h2></div>
+  <p><code>html</code> e <code>body</code> devem ter o <b>tamanho exato da resolução do projeto</b> em pixels (ex.: <code>width:1080px; height:1920px</code>) com <code>overflow:hidden</code> e <code>margin:0</code>. O player escala o template para o box do clip na timeline — nunca use unidades de viewport (<code>vw/vh</code>) como base do layout.</p>
+  <p><b>Fundo:</b> se o template é um <b>overlay</b> (título, lower-third, sticker), use <code>background: transparent</code> para compor sobre os clips das tracks inferiores. Se é uma <b>cena de fundo</b>, defina uma cor/gradiente sólido.</p>
+  <p><b>Empilhamento:</b> na timeline, tracks superiores cobrem as inferiores. O template não controla isso — apenas garanta que a transparência esteja correta.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="demo">
+  <div class="tc"><span class="stamp">00:05</span><h2>Demo interativa: o playhead é você</h2></div>
+  <p class="muted">O template de referência da seção seguinte está rodando aqui dentro de um iframe. Arraste o controle — cada movimento chama <code>Motion.seek(t)</code>, exatamente como o editor e o renderizador fazem.</p>
+  <div class="demo">
+    <div class="demo-screen"><iframe id="demoFrame" title="Template de referência rodando ao vivo"></iframe></div>
+    <div class="demo-ctrl">
+      <label for="scrub">Playhead — Motion.seek(t)</label>
+      <input type="range" id="scrub" min="0" max="5" step="0.001" value="0" aria-label="Tempo do playhead em segundos">
+      <div class="readout">t = <b id="roT">0.000</b>s&ensp;·&ensp;frame <b id="roF">0</b> / 300</div>
+      <p class="demo-note">Note que dá para arrastar para trás, pular para o meio, soltar em qualquer ponto — o visual é sempre correto. Isso é o determinismo do contrato em ação: nenhum relógio interno, nenhum estado acumulado.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="exemplo">
+  <div class="tc"><span class="stamp">00:06</span><h2>Template de referência (copiável)</h2></div>
+  <p>Estrutura mínima completa que passa no validador e funciona em preview e export. Use como esqueleto: troque o conteúdo do <code>#stage</code> e a lógica dentro de <code>seek(t)</code>.</p>
+  <div class="codeblock">
+    <div class="codehead"><span>template-referencia.html · 1080×1920 · 60fps · 5s</span><button id="btnCopy" type="button">Copiar</button></div>
+    <pre><code id="codeRef"></code></pre>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="checklist">
+  <div class="tc"><span class="stamp">00:07</span><h2>Checklist antes de entregar</h2></div>
+  <ol class="check">
+    <li>Arquivo único: CSS e JS do clipe inline, sem bundlers. Bibliotecas externas só via CDN https com versão fixa (<code>&lt;script src&gt;</code> clássico ou <code>importmap</code> + <code>type="module"</code>).</li>
+    <li><code>window.Motion</code> expõe <code>config</code> (com <code>fps</code>, <code>durationInSeconds</code>, <code>totalFrames</code>), <code>seek</code>, <code>renderFrame</code> e <code>whenReady</code>.</li>
+    <li><code>seek(t)</code> é pura: chamar com qualquer t, em qualquer ordem, produz sempre o mesmo visual. Teste mental: <code>seek(3); seek(0.5); seek(3)</code> — os dois <code>seek(3)</code> são idênticos?</li>
+    <li>Zero rAF/setInterval autônomos, zero <code>Date.now()</code>, zero <code>Math.random()</code> sem seed.</li>
+    <li><code>html,body</code> no tamanho exato da resolução, <code>overflow:hidden</code>, fundo transparente se for overlay.</li>
+    <li>Fontes aguardadas em <code>whenReady()</code> (<code>document.fonts.ready</code>).</li>
+    <li>Valores clampeados: <code>seek(-1)</code> e <code>seek(999)</code> não quebram nem geram estado inválido.</li>
+    <li>Sem <code>&lt;video&gt;</code>/<code>&lt;audio&gt;</code> embutidos; todo asset externo (lib, modelo, textura, fonte) carregado antes de <code>whenReady()</code> resolver.</li>
+    <li>Bibliotecas e 3D sem loop próprio: nada de <code>setAnimationLoop</code>, <code>autoplay</code> ou timeline tocando sozinha — só <code>seek(t)</code>.</li>
+  </ol>
+</section>
+
+<footer>Motion Studio · formato Video HTML v1 · animação = f(t)</footer>
+</div>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════
+// Fonte única de verdade: o template de referência.
+// É usado (1) no bloco de código exibido/copiável e
+// (2) rodando ao vivo no iframe da demo.
+// ═══════════════════════════════════════════════════════════
+var TEMPLATE_SRC = [
+'<!DOCTYPE html>',
+'<html lang="pt-BR">',
+'<head>',
+'<meta charset="UTF-8">',
+'<link rel="preconnect" href="https://fonts.googleapis.com">',
+'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>',
+'<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;800&display=swap" rel="stylesheet">',
+'<style>',
+'  * { margin: 0; padding: 0; box-sizing: border-box; }',
+'  /* Tamanho EXATO da resolução do projeto. Overlay => fundo transparente. */',
+'  html, body { width: 1080px; height: 1920px; overflow: hidden; background: transparent; }',
+'  #stage {',
+'    position: absolute; inset: 0;',
+'    display: flex; flex-direction: column;',
+'    justify-content: center; align-items: center; gap: 36px;',
+'    font-family: Inter, sans-serif;',
+'  }',
+'  #title {',
+'    font-size: 96px; font-weight: 800; color: #ffffff;',
+'    opacity: 0; text-shadow: 0 4px 24px rgba(0,0,0,.35);',
+'  }',
+'  #bar { width: 0; height: 8px; background: #82ea00; border-radius: 4px; }',
+'  #sub { font-size: 40px; color: rgba(255,255,255,.85); opacity: 0; }',
+'</style>',
+'</head>',
+'<body>',
+'<div id="stage">',
+'  <div id="title">SEU T\u00cdTULO AQUI</div>',
+'  <div id="bar"></div>',
+'  <div id="sub">animado 100% via seek(t)</div>',
+'</div>',
+'<script>',
+'(function () {',
+"  'use strict';",
+'',
+'  // \u2500\u2500 1. Configura\u00e7\u00e3o obrigat\u00f3ria \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+'  var CONFIG = {',
+'    fps: 60,',
+'    durationInSeconds: 5,',
+'    totalFrames: 60 * 5,   // fps * durationInSeconds',
+'  };',
+'',
+'  var title = document.getElementById(\'title\');',
+'  var bar   = document.getElementById(\'bar\');',
+'  var sub   = document.getElementById(\'sub\');',
+'',
+'  // Helpers determin\u00edsticos (fun\u00e7\u00f5es puras de t)',
+'  function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }',
+'  function easeOutCubic(p) { return 1 - Math.pow(1 - p, 3); }',
+'  // Progresso 0\u21921 de um segmento que come\u00e7a em t0 e dura dur segundos',
+'  function seg(t, t0, dur) { return clamp((t - t0) / dur, 0, 1); }',
+'',
+'  // \u2500\u2500 2. seek(t): TODO o estado visual \u00e9 fun\u00e7\u00e3o pura de t \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+'  // Nunca acumule estado entre chamadas. seek(3) ap\u00f3s seek(0)',
+'  // deve ser id\u00eantico a seek(3) ap\u00f3s seek(4.9).',
+'  function seek(t) {',
+'    t = clamp(t, 0, CONFIG.durationInSeconds);',
+'',
+'    var pTitle = easeOutCubic(seg(t, 0.0, 0.8));  // t\u00edtulo entra em 0\u20130.8s',
+'    var pBar   = easeOutCubic(seg(t, 0.5, 1.2));  // barra cresce em 0.5\u20131.7s',
+'    var pSub   = easeOutCubic(seg(t, 0.9, 0.7));  // subt\u00edtulo em 0.9\u20131.6s',
+'    var pOut   = 1 - seg(t, CONFIG.durationInSeconds - 0.6, 0.6); // sa\u00edda geral',
+'',
+'    title.style.opacity   = (pTitle * pOut).toFixed(3);',
+'    title.style.transform = \'translateY(\' + ((1 - pTitle) * 80).toFixed(1) + \'px)\';',
+'',
+'    bar.style.width   = (pBar * 420).toFixed(1) + \'px\';',
+'    bar.style.opacity = pOut.toFixed(3);',
+'',
+'    sub.style.opacity   = (pSub * pOut).toFixed(3);',
+'    sub.style.transform = \'translateY(\' + ((1 - pSub) * 40).toFixed(1) + \'px)\';',
+'  }',
+'',
+'  // \u2500\u2500 3. renderFrame(f): mesmo render, endere\u00e7ado por frame \u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+'  function renderFrame(f) { seek(f / CONFIG.fps); }',
+'',
+'  // \u2500\u2500 4. API p\u00fablica \u2014 contrato window.Motion \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+'  window.Motion = {',
+'    config: CONFIG,',
+'    seek: seek,',
+'    renderFrame: renderFrame,',
+'    init: function () { seek(0); },',
+'    whenReady: function () {',
+'      // Espera as fontes para o player n\u00e3o capturar texto com fallback',
+'      return (document.fonts ? document.fonts.ready : Promise.resolve())',
+'        .then(function () { seek(0); });',
+'    },',
+'  };',
+'  // window.Motion.config fica dispon\u00edvel para o player e o validador.',
+'})();',
+'<\/script>',
+'</body>',
+'</html>',
+].join('\n');
+
+// ── Exibe o código (textContent escapa tudo sozinho) ──────
+document.getElementById('codeRef').textContent = TEMPLATE_SRC;
+
+// ── Botão copiar ──────────────────────────────────────────
+document.getElementById('btnCopy').addEventListener('click', function () {
+  var btn = this;
+  navigator.clipboard.writeText(TEMPLATE_SRC).then(function () {
+    btn.textContent = 'Copiado ✓';
+    setTimeout(function () { btn.textContent = 'Copiar'; }, 1600);
+  });
+});
+
+// ── Demo ao vivo: o mesmo template rodando num iframe ─────
+var frame = document.getElementById('demoFrame');
+frame.srcdoc = TEMPLATE_SRC;
+
+var scrub = document.getElementById('scrub');
+var roT   = document.getElementById('roT');
+var roF   = document.getElementById('roF');
+
+function drive(t) {
+  roT.textContent = t.toFixed(3);
+  roF.textContent = Math.round(t * 60);
+  try {
+    var M = frame.contentWindow && frame.contentWindow.Motion;
+    if (M) M.seek(t); // exatamente a chamada que o editor e o export fazem
+  } catch (e) {}
+}
+
+scrub.addEventListener('input', function () { drive(parseFloat(scrub.value)); });
+frame.addEventListener('load', function () {
+  try {
+    var M = frame.contentWindow.Motion;
+    var ready = (M && M.whenReady) ? M.whenReady() : Promise.resolve();
+    ready.then(function () { drive(0); });
+  } catch (e) {}
+});
+</script>
+</body>
+</html>

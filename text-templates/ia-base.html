@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+
+<!--
+  ==============================================================================
+  MOTION STUDIO — AI-SAFE HTML TEXT TEMPLATE
+  ==============================================================================
+  
+  ESTE ARQUIVO É UM TEMPLATE BASE OFICIAL PARA TEXTOS / LEGENDAS HTML DO APP.
+
+  OBJETIVO
+  ------------------------------------------------------------------------------
+  Este HTML é usado pelo Motion Studio como template de texto animado.
+
+  A IA pode receber este arquivo e criar uma nova variação visual com base nele,
+  sem precisar de instruções externas, porque todas as regras necessárias estão
+  documentadas aqui.
+
+  O app carrega templates de texto usando o sistema:
+
+    window.__TextRegistry.loadAll('text-templates/index.json')
+
+  Esse sistema:
+    1. Lê o arquivo text-templates/index.json.
+    2. Para cada item do JSON, procura o campo "file" ou "html".
+    3. Se existir "file", faz fetch do HTML.
+    4. Se existir "html", usa o HTML inline.
+    5. Guarda o template em memória.
+    6. Quando o usuário adiciona o texto na timeline, chama:
+
+         window.__TextRegistry.buildHtml(tmplId, params, res)
+
+    7. O buildHtml mistura:
+         - defaults do index.json
+         - params editados pelo usuário
+         - resolução do projeto: w e h
+
+    8. Depois substitui placeholders no HTML com esta regra:
+
+         {{nomeDoCampo}}
+
+       Exemplo:
+         {{text}}       vira o texto real
+         {{fontSize}}   vira o tamanho real
+         {{color}}      vira a cor real
+         {{duration}}   vira a duração real
+         {{w}}          vira a largura do projeto
+         {{h}}          vira a altura do projeto
+
+  IMPORTANTE SOBRE PLACEHOLDERS
+  ------------------------------------------------------------------------------
+  O sistema substitui placeholders usando esta regex:
+
+      /\{\{(\w+)\}\}/g
+
+  Então, os placeholders DEVEM ser simples.
+  
+  Permitido:
+      {{text}}
+      {{fontSize}}
+      {{fontWeight}}
+      {{fontFamily}}
+      {{duration}}
+      {{color}}
+      {{align}}
+      {{bg}}
+      {{w}}
+      {{h}}
+
+  Não usar:
+      {{font-size}}
+      {{font.family}}
+      {{text color}}
+      {{ text }}
+
+  CAMPOS RECOMENDADOS NO index.json
+  ------------------------------------------------------------------------------
+  Todo template externo deve ser registrado no arquivo:
+
+      text-templates/index.json
+
+  Exemplo de registro:
+
+  [
+    {
+      "id": "txt_ai_base",
+      "name": "AI Base Text",
+      "desc": "Template base seguro para IA",
+      "category": "Títulos",
+      "file": "text-templates/txt_ai_base.html",
+      "defaults": {
+        "text": "Exemplo de legenda\\ncom duas linhas",
+        "fontFamily": "Inter, sans-serif",
+        "fontSize": 96,
+        "fontWeight": "800",
+        "color": "#ffffff",
+        "align": "center",
+        "bg": "transparent",
+        "duration": 4
+      }
+    }
+  ]
+
+  REGRAS PARA CRIAR UM NOVO TEMPLATE
+  ------------------------------------------------------------------------------
+  Ao criar uma nova variação visual deste template, a IA deve:
+
+    1. Manter este arquivo como HTML completo.
+    2. Preservar o contrato técnico do Motion Studio.
+    3. Alterar apenas a aparência visual.
+    4. Manter os placeholders compatíveis com o index.json.
+    5. Não remover o elemento principal de texto.
+    6. Não remover o objeto window.Motion.
+    7. Não remover a função seek(t).
+    8. Não depender de bibliotecas externas.
+   9. Não depender de CSS externo.
+   10. Não depender de scripts externos.
+
+  O QUE A IA PODE ALTERAR
+  ------------------------------------------------------------------------------
+  A IA pode alterar livremente a área marcada como:
+
+      AI VISUAL AREA — SAFE TO EDIT
+
+  Ela pode mudar:
+    - Layout visual
+    - Posição do texto
+    - Background
+    - Gradientes
+    - Bordas
+    - Sombras
+    - Brilhos
+    - Blur
+    - Tipografia visual
+    - Letter spacing
+    - Line height
+    - Text transform
+    - Pseudo-elements
+    - Animação de entrada: @keyframes ms_in
+    - Animação de saída: @keyframes ms_out
+
+  O QUE A IA NÃO PODE ALTERAR / REMOVER
+  ------------------------------------------------------------------------------
+  NÃO remover ou renomear:
+
+    - id="__txt_el"
+    - window.Motion
+    - window.Motion.config
+    - window.Motion.config.durationInSeconds
+    - window.Motion.whenReady()
+    - window.Motion.setDuration(d)
+    - window.Motion.seek(t)
+    - reportSize()
+    - {{w}}
+    - {{h}}
+    - {{text}}
+    - {{fontFamily}}
+    - {{fontSize}}
+    - {{fontWeight}}
+    - {{color}}
+    - {{align}}
+    - {{bg}}
+    - {{duration}}
+
+  COMO A ANIMAÇÃO FUNCIONA
+  ------------------------------------------------------------------------------
+  O Motion Studio não depende de playback normal do navegador.
+
+  O app controla o template chamando:
+
+      window.Motion.seek(t)
+
+  Onde "t" é o tempo atual em segundos.
+
+  Exemplo:
+      Motion.seek(0)     mostra o primeiro frame
+      Motion.seek(1.2)   mostra o estado visual em 1.2s
+      Motion.seek(3.8)   mostra o estado visual em 3.8s
+
+  Para permitir preview e export frame-by-frame, o seek(t) aplica animações CSS
+  em estado pausado, usando animationDelay negativo.
+
+  Exemplo:
+      animationDelay = -1.2s
+
+  Isso faz o navegador "pular" para o ponto exato da animação.
+
+  ELEMENTO PRINCIPAL
+  ------------------------------------------------------------------------------
+  O elemento principal precisa ser:
+
+      <div id="__txt_el">{{text}}</div>
+
+  Esse ID é obrigatório porque o editor pode atualizar o texto ao vivo sem recriar
+  o iframe inteiro.
+
+  EXEMPLO DE TEXTO
+  ------------------------------------------------------------------------------
+  O texto padrão recomendado no index.json é:
+
+      "Exemplo de legenda\\ncom duas linhas"
+
+  O "\\n" cria quebra de linha. O CSS deste template usa white-space: pre-wrap
+  para respeitar essas quebras.
+
+  RESULTADO ESPERADO DE UMA IA
+  ------------------------------------------------------------------------------
+  Quando uma IA receber este HTML para criar um novo template, ela deve retornar:
+
+    1. Um HTML completo baseado neste arquivo.
+    2. Com visual novo.
+    3. Com a lógica Motion preservada.
+    4. Com os mesmos placeholders.
+    5. Com um exemplo de item para index.json, se solicitado.
+
+  ==============================================================================
+-->
+
+<style>
+  /*
+    ============================================================================
+    REQUIRED BASE RESET — DO NOT REMOVE
+    ============================================================================
+  */
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+    font-family: {{fontFamily}};
+  }
+
+  /*
+    ============================================================================
+    AI VISUAL AREA — SAFE TO EDIT
+    ----------------------------------------------------------------------------
+    A IA pode alterar o CSS desta área para criar novos estilos visuais.
+
+    Pode alterar:
+      - .text-stage
+      - .text-safe-area
+      - #__txt_el
+      - #__txt_el::before
+      - #__txt_el::after
+      - @keyframes ms_in
+      - @keyframes ms_out
+
+    Não remover:
+      - o seletor #__txt_el
+      - os placeholders
+      - as keyframes ms_in e ms_out, a menos que mantenha os mesmos nomes
+    ============================================================================
+  */
+
+  .text-stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: {{bg}};
+  }
+
+  .text-safe-area {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  @keyframes ms_in {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, calc(-50% + 54px)) scale(0.94);
+      filter: blur(10px);
+    }
+
+    65% {
+      opacity: 1;
+      transform: translate(-50%, calc(-50% - 4px)) scale(1.015);
+      filter: blur(0);
+    }
+
+    100% {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+      filter: blur(0);
+    }
+  }
+
+  @keyframes ms_out {
+    0% {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+      filter: blur(0);
+    }
+
+    100% {
+      opacity: 0;
+      transform: translate(-50%, calc(-50% - 36px)) scale(0.985);
+      filter: blur(8px);
+    }
+  }
+
+  #__txt_el {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+
+    width: 88%;
+    max-width: 980px;
+
+    transform: translate(-50%, -50%);
+
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+
+    opacity: 0;
+    will-change: transform, opacity, filter;
+
+    text-shadow:
+      0 4px 12px rgba(0, 0, 0, 0.32),
+      0 16px 42px rgba(0, 0, 0, 0.28);
+  }
+
+  #__txt_el::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 112%;
+    height: 118%;
+    transform: translate(-50%, -50%);
+    z-index: -1;
+    border-radius: 28px;
+    background:
+      radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.10), transparent 62%);
+    opacity: 0.65;
+    filter: blur(18px);
+  }
+
+  /*
+    ============================================================================
+    END AI VISUAL AREA
+    ----------------------------------------------------------------------------
+    A partir daqui, a IA não deve alterar a lógica funcional.
+    ============================================================================
+  */
+</style>
+</head>
+
+<body>
+  <div class="text-stage">
+    <div class="text-safe-area">
+      <div id="__txt_el">{{text}}</div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  /*
+    ============================================================================
+    MOTION STUDIO FUNCTIONAL CONTRACT — DO NOT EDIT
+    ----------------------------------------------------------------------------
+    Esta área faz o template funcionar no preview, timeline e export.
+
+    O app chama:
+
+        window.Motion.seek(t)
+
+    para controlar exatamente o frame visual do texto.
+    ============================================================================
+  */
+
+  const el = document.getElementById('__txt_el');
+
+  let DUR = Number({{duration}}) || 4;
+
+  let IN = Math.min(0.6, DUR * 0.15);
+  let OUT = Math.min(0.5, DUR * 0.12);
+
+  function recalcTiming() {
+    IN = Math.min(0.6, DUR * 0.15);
+    OUT = Math.min(0.5, DUR * 0.12);
+  }
+
+  function normalizeTime(t) {
+    t = Number(t);
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+  }
+
+  function clearMotionStyles() {
+    el.style.animation = '';
+    el.style.animationDelay = '';
+    el.style.animationPlayState = '';
+    el.style.opacity = '';
+  }
+
+  function reportSize() {
+    if (!el) return;
+
+    const r = el.getBoundingClientRect();
+
+    if (r.width < 1 || r.height < 1) {
+      setTimeout(reportSize, 50);
+      return;
+    }
+  }
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() {
+        return DUR;
+      },
+      fps: 30
+    },
+
+    whenReady() {
+      return Promise.resolve();
+    },
+
+    setDuration(d) {
+      d = Number(d);
+
+      if (Number.isFinite(d) && d > 0) {
+        DUR = d;
+        recalcTiming();
+      }
+    },
+
+    seek(t) {
+      t = normalizeTime(t);
+
+      clearMotionStyles();
+
+      if (t <= 0) {
+        el.style.opacity = '0';
+        return;
+      }
+
+      if (t <= IN) {
+        el.style.animation = 'ms_in ' + IN + 's cubic-bezier(0.22, 1, 0.36, 1) forwards';
+        el.style.animationDelay = (-t) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+
+      if (t >= DUR - OUT) {
+        const tOut = t - (DUR - OUT);
+
+        el.style.animation = 'ms_out ' + OUT + 's ease forwards';
+        el.style.animationDelay = (-tOut) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+
+      el.style.opacity = '1';
+    }
+  };
+
+  window.Motion.seek(0);
+
+  if (document.fonts?.ready) {
+    document.fonts.ready.then(reportSize);
+  } else {
+    setTimeout(reportSize, 120);
+  }
+
+  window.addEventListener('resize', reportSize);
+
+  window.__reportTextSize = reportSize;
+})();
+</script>
+</body>
+</html>

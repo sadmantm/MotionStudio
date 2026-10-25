@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body {
+    position: relative;
+    font-family: {{fontFamily}};
+  }
+
+  .text-stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: {{bg}};
+  }
+
+  .text-safe-area {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  /* ── GLITCH LAYERS ── */
+  @keyframes ms_in {
+    0%   { opacity: 0; transform: translate(-50%, -50%) scaleX(1.08); clip-path: inset(100% 0 0 0); }
+    30%  { opacity: 1; clip-path: inset(0% 0 0 0); }
+    40%  { transform: translate(calc(-50% + 4px), -50%) scaleX(1); }
+    55%  { transform: translate(calc(-50% - 3px), -50%) scaleX(1); }
+    70%  { transform: translate(-50%, -50%) scaleX(1); }
+    100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+
+  @keyframes ms_out {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); clip-path: inset(0% 0 0 0); }
+    40%  { transform: translate(calc(-50% + 5px), -50%); clip-path: inset(0% 0 30% 0); }
+    70%  { transform: translate(calc(-50% - 5px), -50%); clip-path: inset(30% 0 0 0); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scaleX(1.1); clip-path: inset(0% 0 100% 0); }
+  }
+
+  @keyframes glitch_r {
+    0%, 90%, 100% { transform: translate(-50%, -50%) translateX(0); opacity: 0.5; }
+    92% { transform: translate(-50%, -50%) translateX(-5px); }
+    95% { transform: translate(-50%, -50%) translateX(5px); }
+  }
+
+  @keyframes glitch_b {
+    0%, 88%, 100% { transform: translate(-50%, -50%) translateX(0); opacity: 0.5; }
+    90% { transform: translate(-50%, -50%) translateX(5px); }
+    93% { transform: translate(-50%, -50%) translateX(-5px); }
+  }
+
+  /* Camada RED */
+  #__txt_el::before {
+    content: attr(data-text);
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 100%;
+    transform: translate(-50%, -50%);
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: #ff003c;
+    mix-blend-mode: screen;
+    pointer-events: none;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    animation: glitch_r 3.5s infinite;
+  }
+
+  /* Camada BLUE */
+  #__txt_el::after {
+    content: attr(data-text);
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 100%;
+    transform: translate(-50%, -50%);
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: #00f0ff;
+    mix-blend-mode: screen;
+    pointer-events: none;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    animation: glitch_b 3.5s infinite;
+  }
+
+  #__txt_el {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 88%;
+    max-width: 980px;
+    transform: translate(-50%, -50%);
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    opacity: 0;
+    will-change: transform, opacity, clip-path;
+    text-transform: uppercase;
+    text-shadow:
+      0 0 18px rgba(255,255,255,0.6),
+      0 0 42px rgba(255,255,255,0.2);
+  }
+</style>
+</head>
+
+<body>
+  <div class="text-stage">
+    <div class="text-safe-area">
+      <div id="__txt_el" data-text="{{text}}">{{text}}</div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const el = document.getElementById('__txt_el');
+  let DUR = Number({{duration}}) || 4;
+  let IN = Math.min(0.6, DUR * 0.15);
+  let OUT = Math.min(0.5, DUR * 0.12);
+
+  function recalcTiming() {
+    IN = Math.min(0.6, DUR * 0.15);
+    OUT = Math.min(0.5, DUR * 0.12);
+  }
+
+  function normalizeTime(t) {
+    t = Number(t);
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+  }
+
+  function clearMotionStyles() {
+    el.style.animation = '';
+    el.style.animationDelay = '';
+    el.style.animationPlayState = '';
+    el.style.opacity = '';
+  }
+
+  function reportSize() {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) { setTimeout(reportSize, 50); return; }
+  }
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: 30
+    },
+    whenReady() { return Promise.resolve(); },
+    setDuration(d) {
+      d = Number(d);
+      if (Number.isFinite(d) && d > 0) { DUR = d; recalcTiming(); }
+    },
+    seek(t) {
+      t = normalizeTime(t);
+      clearMotionStyles();
+      if (t <= 0) { el.style.opacity = '0'; return; }
+      if (t <= IN) {
+        el.style.animation = 'ms_in ' + IN + 's cubic-bezier(0.22,1,0.36,1) forwards';
+        el.style.animationDelay = (-t) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+      if (t >= DUR - OUT) {
+        const tOut = t - (DUR - OUT);
+        el.style.animation = 'ms_out ' + OUT + 's ease forwards';
+        el.style.animationDelay = (-tOut) + 's';
+        el.style.animationPlayState = 'paused';
+        return;
+      }
+      el.style.opacity = '1';
+    }
+  };
+
+  window.Motion.seek(0);
+  if (document.fonts?.ready) { document.fonts.ready.then(reportSize); }
+  else { setTimeout(reportSize, 120); }
+  window.addEventListener('resize', reportSize);
+  window.__reportTextSize = reportSize;
+})();
+</script>
+</body>
+</html>

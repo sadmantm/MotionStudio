@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      background: transparent !important;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      font-family: 'Poppins', Arial, sans-serif;
+    }
+
+    #stage { position: absolute; inset: 0; width: 1920px; height: 1080px; }
+
+    #bg {
+      position: absolute;
+      left: 960px; top: 540px;
+      width: 100px; height: 100px;
+      margin-left: -50px; margin-top: -50px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 50% 42%, #ffffff 0%, #f4f9fc 60%, #e8f3f8 100%);
+      transform: scale(0);
+      will-change: transform;
+    }
+
+    #ripple, #ripple2 {
+      position: absolute;
+      left: 960px; top: 540px;
+      width: 100px; height: 100px;
+      margin-left: -50px; margin-top: -50px;
+      border-radius: 50%;
+      border: 6px solid rgba(37, 150, 190, 0.4);
+      transform: scale(0);
+      opacity: 0;
+      will-change: transform, opacity;
+    }
+
+    .row {
+      position: absolute;
+      left: 0; width: 1920px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #arc {
+      position: absolute;
+      left: 650px; top: 90px;
+      width: 380px; height: 380px;
+      pointer-events: none;
+      opacity: 0;
+      will-change: opacity;
+    }
+
+    #logoRow { top: 130px; height: 300px; }
+    #logoWrap {
+      width: 300px; height: 300px;
+      opacity: 0;
+      transform: scale(0.4);
+      filter: blur(14px);
+      will-change: transform, opacity, filter;
+    }
+    #logo { width: 100%; height: 100%; object-fit: contain; display: block; }
+    #logoFallback {
+      width: 100%; height: 100%; border-radius: 50%;
+      background: linear-gradient(135deg, #2596be 0%, #2f1f85 100%);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 150px; font-weight: 900; letter-spacing: -6px;
+    }
+
+    #company {
+      top: 470px; height: 140px;
+      font-size: 130px; font-weight: 900;
+      letter-spacing: -4px;
+      color: #5db536;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    #company .ch {
+      display: inline-block;
+      opacity: 0;
+      transform: translateY(70px) rotate(8deg);
+      will-change: transform, opacity;
+    }
+
+    #dividerRow { top: 640px; height: 7px; }
+    #divider {
+      width: 420px; height: 7px;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #2596be, #2f1f85);
+      transform: scaleX(0);
+      transform-origin: center;
+      will-change: transform;
+    }
+
+    /* Morph tagline ----------------------------------------------------- */
+    #taglineRow { top: 675px; height: 100px; }
+    #morphBox {
+      position: relative;
+      width: 1920px; height: 100px;
+      opacity: 0;
+      transform: translateY(44px);
+      will-change: transform, opacity;
+      filter: url(#threshold);
+    }
+    #text1, #text2 {
+      position: absolute;
+      left: 0; top: 0;
+      width: 100%; height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Poppins', sans-serif;
+      font-size: 48px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: #2f1f85;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    #contactRow { top: 830px; height: 130px; }
+    #contactWrap {
+      display: flex;
+      align-items: center;
+      gap: 26px;
+      padding: 30px 60px;
+      border-radius: 90px;
+      background: #2f1f85;
+      opacity: 0;
+      transform: translateY(60px) scale(0.85);
+      will-change: transform, opacity;
+      box-shadow: 0 24px 70px rgba(47, 31, 133, 0.4);
+    }
+    #phoneIcon { width: 52px; height: 52px; flex: 0 0 auto; will-change: transform; }
+    #contact { font-size: 50px; font-weight: 700; color: #fff; white-space: nowrap; letter-spacing: 1px; }
+
+    .dot { position: absolute; border-radius: 50%; opacity: 0; will-change: transform, opacity; }
+  </style>
+</head>
+<body>
+
+  <!-- SVG threshold filter for the gooey morph -->
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <filter id="threshold">
+        <feColorMatrix in="SourceGraphic" type="matrix"
+          values="1 0 0 0 0
+                  0 1 0 0 0
+                  0 0 1 0 0
+                  0 0 0 255 -140" />
+      </filter>
+    </defs>
+  </svg>
+
+  <div id="stage">
+    <div id="bg"></div>
+    <div id="ripple"></div>
+    <div id="ripple2"></div>
+
+    <svg id="arc" viewBox="0 0 620 620" xmlns="http://www.w3.org/2000/svg">
+      <circle id="arcC" cx="310" cy="310" r="296" fill="none" stroke="#2596be" stroke-width="9"
+              stroke-linecap="round" stroke-dasharray="1860" stroke-dashoffset="1860"
+              transform="rotate(-90 310 310)"/>
+    </svg>
+
+    <div id="logoRow" class="row">
+      <div id="logoWrap">
+        <img id="logo" src="./logo.png" alt="Netvale"
+             onerror="this.style.display='none';document.getElementById('logoFallback').style.display='flex';">
+        <div id="logoFallback" style="display:none;">N</div>
+      </div>
+    </div>
+
+    <div id="company" class="row">NETVALE</div>
+
+    <div id="dividerRow" class="row"><div id="divider"></div></div>
+
+    <div id="taglineRow" class="row">
+      <div id="morphBox">
+        <span id="text1"></span>
+        <span id="text2"></span>
+      </div>
+    </div>
+
+    <div id="contactRow" class="row">
+      <div id="contactWrap">
+        <svg id="phoneIcon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" fill="#fff"/>
+        </svg>
+        <div id="contact">+55 99 99205-1850</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
+    function norm(t, a, b) { return clamp((t - a) / (b - a), 0, 1); }
+    function easeOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
+
+    const DUR = 10;
+    const stage = document.getElementById('stage');
+
+    /* ---- company letters ---- */
+    const company = document.getElementById('company');
+    company.innerHTML = company.textContent.split('').map(c => '<span class="ch">' + c + '</span>').join('');
+    const chars = Array.from(company.querySelectorAll('.ch'));
+
+    /* ---- floating dots ---- */
+    const dots = [];
+    (function buildDots() {
+      const palette = ['#2596be', '#2f1f85'];
+      for (let i = 0; i < 22; i++) {
+        const d = document.createElement('div');
+        d.className = 'dot';
+        const size = 10 + (i % 6) * 7;
+        d.style.width = size + 'px';
+        d.style.height = size + 'px';
+        d.style.background = palette[i % 2];
+        const angle = (i / 22) * Math.PI * 2 + (i % 3);
+        const radius = 380 + (i % 5) * 90;
+        d._bx = 960 + Math.cos(angle) * radius * 1.45 - size / 2;
+        d._by = 540 + Math.sin(angle) * radius - size / 2;
+        d._amp = 18 + (i % 4) * 10;
+        d._spd = 0.6 + (i % 5) * 0.18;
+        d._ph = i * 0.7;
+        d._delay = (i % 9) * 45;
+        d.style.left = d._bx + 'px';
+        d.style.top = d._by + 'px';
+        stage.appendChild(d);
+        dots.push(d);
+      }
+    })();
+
+    /* =================================================================
+       MORPH TAGLINE — deterministic, driven by seek(t), no rAF/Date
+       ================================================================= */
+    const t1 = document.getElementById('text1');
+    const t2 = document.getElementById('text2');
+
+    const phrases = [
+      'Conectando você ao mundo',
+      'Melhores Planos Menores Preços',
+      'Velocidade que você sente',
+      'Conexão estável, 24 horas'
+    ];
+
+    // Morph window inside the timeline (seconds)
+    const MORPH_START = 4.2;   // first phrase already visible by now
+    const MORPH_END   = 9.0;   // last phrase settles before outro
+    const HOLD = 0.85;         // fraction of each cycle the phrase stays still
+    // → remaining (1-HOLD) of each cycle is the gooey transition
+
+    function applyMorph(t) {
+      const span = MORPH_END - MORPH_START;
+      const seg = span / phrases.length;        // time per phrase
+      const local = clamp(t - MORPH_START, 0, span);
+      let idx = Math.floor(local / seg);
+      if (idx >= phrases.length) idx = phrases.length - 1;
+
+      const within = (local - idx * seg) / seg; // 0..1 inside this phrase
+      const cur = phrases[idx];
+      const nxt = phrases[(idx + 1) % phrases.length];
+
+      // Before MORPH_START or on last phrase past its end → just show cur, crisp
+      if (t < MORPH_START) {
+        t1.textContent = phrases[0];
+        t2.textContent = phrases[0];
+        t1.style.filter = ''; t1.style.opacity = '1';
+        t2.style.filter = ''; t2.style.opacity = '0';
+        return;
+      }
+      if (idx === phrases.length - 1 && within >= 0) {
+        // stay on last phrase, no further morph
+        t1.textContent = cur; t1.style.filter = ''; t1.style.opacity = '1';
+        t2.style.opacity = '0';
+        return;
+      }
+
+      t1.textContent = cur;
+      t2.textContent = nxt;
+
+      if (within < HOLD) {
+        // holding: show current crisp, hide next
+        t1.style.filter = ''; t1.style.opacity = '1';
+        t2.style.filter = ''; t2.style.opacity = '0';
+      } else {
+        // transition: gooey blend cur → nxt
+        let fraction = (within - HOLD) / (1 - HOLD); // 0..1
+        // outgoing (text1)
+        let inv = 1 - fraction;
+        t1.style.filter = `blur(${Math.min(8 / inv - 8, 100)}px)`;
+        t1.style.opacity = `${Math.pow(inv, 0.4)}`;
+        // incoming (text2)
+        t2.style.filter = `blur(${Math.min(8 / fraction - 8, 100)}px)`;
+        t2.style.opacity = `${Math.pow(fraction, 0.4)}`;
+      }
+    }
+
+    /* =================================================================
+       Timeline
+       ================================================================= */
+    const tl = anime.timeline({ autoplay: false, easing: 'easeOutExpo', duration: 800 });
+
+    tl.add({ targets: '#bg', scale: [0, 40], duration: 1500, easing: 'cubicBezier(0.16,1,0.3,1)' }, 200);
+    tl.add({ targets: '#ripple', scale: [0, 14], opacity: [0.7, 0], duration: 1400, easing: 'easeOutExpo' }, 250);
+    tl.add({ targets: '#ripple2', scale: [0, 18], opacity: [0.5, 0], duration: 1500, easing: 'easeOutExpo' }, 600);
+
+    tl.add({ targets: '#arc', opacity: [0, 1], duration: 400 }, 900);
+    tl.add({ targets: '#arcC', strokeDashoffset: [1860, 0], rotate: [-90, 270], duration: 1600, easing: 'easeInOutSine' }, 900);
+
+    tl.add({ targets: '#logoWrap', opacity: [0, 1], scale: [0.4, 1], filter: ['blur(14px)', 'blur(0px)'], rotate: [-12, 0], duration: 1200, easing: 'easeOutBack' }, 1100);
+
+    tl.add({ targets: chars, opacity: [0, 1], translateY: [70, 0], rotate: [8, 0], duration: 900, delay: anime.stagger(55), easing: 'easeOutBack' }, 1900);
+
+    // divider: scaleX only (no width animation)
+    tl.add({ targets: '#divider', scaleX: [0, 1], duration: 800, easing: 'easeInOutQuart' }, 2400);
+
+    // morph box just fades in; the morph itself is driven by applyMorph(t)
+    tl.add({ targets: '#morphBox', opacity: [0, 1], translateY: [44, 0], duration: 950, easing: 'easeOutExpo' }, 2650);
+
+    tl.add({ targets: '#contactWrap', opacity: [0, 1], translateY: [60, 0], scale: [0.85, 1], duration: 1000, easing: 'easeOutBack' }, 3000);
+    tl.add({ targets: '#phoneIcon', rotate: [-25, 0], scale: [0.6, 1], duration: 900, easing: 'easeOutElastic(1,0.6)' }, 3300);
+
+    dots.forEach((d) => {
+      tl.add({ targets: d, opacity: [0, 0.85], duration: 700, easing: 'easeOutExpo' }, 1500 + d._delay);
+    });
+
+    /* ---- per-frame procedural layers ---- */
+    function applyFloat(t) {
+      // global fade applied during outro so dots leave with the stage
+      const outP = norm(t, 9.2, 10);
+      const fade = 1 - easeOutCubic(outP);
+      dots.forEach((d) => {
+        const fx = Math.sin(t * d._spd + d._ph) * d._amp;
+        const fy = Math.cos(t * d._spd * 0.85 + d._ph) * d._amp;
+        const base = parseFloat(d.style.opacity || 0) > 0 ? 1 : 0;
+        d.style.transform = `translate(${fx}px, ${fy}px) scale(${base})`;
+        // dim slightly as outro begins (opacity already set by anime; modulate via filter-free approach)
+        d.style.opacity = (base ? 0.85 * fade : 0).toString();
+      });
+    }
+
+    function applyOutro(t) {
+      const p = norm(t, 9.2, 10);
+      stage.style.opacity = (1 - easeOutCubic(p)).toString();
+      const s = 1 + easeOutCubic(p) * 0.06;
+      stage.style.transform = `scale(${s})`;
+      stage.style.transformOrigin = '960px 540px';
+    }
+
+    window.Motion = {
+      config: { durationInSeconds: DUR, fps: 60 },
+      init() { tl.seek(0); },
+      whenReady() { return Promise.resolve(); },
+      setDuration(d) { this.config.durationInSeconds = d; },
+      seek(t) {
+        const c = clamp(t, 0, this.config.durationInSeconds);
+        tl.seek(clamp(c * 1000, 0, tl.duration));
+        applyMorph(c);
+        applyFloat(c);
+        applyOutro(c);
+      },
+    };
+    window.MotionAPI = window.Motion;
+  </script>
+
+</body>
+</html>
