@@ -14,7 +14,6 @@ const WHISPER_READY_TIMEOUT = 60 * 60 * 1000;
 const TX_SAMPLE_TEXT = 'Sua legenda animada fica assim';
 const TX_SAMPLE_DUR  = 2.4;
 const TX_PREFS_KEY   = 'ms.txCaptionPrefs';
-const TX_THUMBS_KEY  = 'ms.txThumbs';
 const TX_PREVIEW_FPS = 30;   // a prévia não precisa de 60 seeks/s
 
 const _tx = {
@@ -77,45 +76,9 @@ function _txMakeFrame(res, w, h) {
 }
 
 /**
- * Miniaturas da grade: quadros WebP do Chromium do servidor (o mesmo da
- * filmstrip), em cache no localStorage pelo hash do HTML. Antes cada card era
- * um iframe vivo de 1080×1920 carregando fontes — com 14 templates o modal
- * abria 15 documentos completos e travava o editor.
+ * Miniaturas da grade: pôsteres WebP do servidor em cache (posters.js). Um
+ * iframe vivo de 1080×1920 por card (14 templates) travava o editor.
  */
-function _txHash(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
-  return (h >>> 0).toString(36);
-}
-
-function _txThumbCache() {
-  try { return JSON.parse(localStorage.getItem(TX_THUMBS_KEY) || '{}') || {}; } catch (_) { return {}; }
-}
-
-/** items: [{ key, html, onReady(url), onFail() }] — guarda no cache só as miniaturas atuais */
-async function _txFetchThumbs(items, res) {
-  const cache = _txThumbCache();
-  // Um pedido por vez: o servidor renderiza numa página só, em fila
-  for (const it of items.filter(it => !cache[it.key])) {
-    try {
-      const resp = await fetch('/api/thumbs/html', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ html: it.html, w: res.w, h: res.h, times: [TX_SAMPLE_DUR * 0.75], height: 240 }),
-      });
-      const url = resp.ok ? (await resp.json()).frames?.[0]?.url : null;
-      if (!url) throw new Error(`HTTP ${resp.status}`);
-      cache[it.key] = url;
-      it.onReady(url);
-    } catch (_) {
-      it.onFail();
-    }
-  }
-  const keep = {};
-  items.forEach(it => { if (cache[it.key]) keep[it.key] = cache[it.key]; });
-  try { localStorage.setItem(TX_THUMBS_KEY, JSON.stringify(keep)); } catch (_) { /* sem espaço */ }
-}
-
 function _txBuildGrid() {
   const grid = document.getElementById('txTmplGrid');
   const res  = window.__appState?.project?.res || { w: 1080, h: 1920 };
@@ -125,8 +88,7 @@ function _txBuildGrid() {
 
   const W = 104, H = 92;
   const scale = W / res.w;
-  const cache = _txThumbCache();
-  const pending = [];
+  const posterAt = TX_SAMPLE_DUR * 0.75;
   grid.innerHTML = '';
   _txTemplates().forEach(t => {
     const card = document.createElement('button');
@@ -147,23 +109,22 @@ function _txBuildGrid() {
     img.alt = '';
     img.decoding = 'async';
     img.style.cssText = `top:${Math.round((H - res.h * scale) / 2)}px;width:${W}px;height:${Math.round(res.h * scale)}px`;
-    const key = `${t.id}|${resKey}|${_txHash(html)}`;
-    if (cache[key]) {
-      img.src = cache[key];
+    const cached = window.MSPosters.cached(html, res, posterAt);
+    if (cached) {
+      img.src = cached;
     } else {
       thumb.classList.add('is-loading');
-      pending.push({
-        key, html,
-        onReady: url => { img.src = url; thumb.classList.remove('is-loading'); },
+      window.MSPosters.get(html, res, posterAt).then(
+        url => { img.src = url; thumb.classList.remove('is-loading'); },
         // Sem Chromium no servidor: o card mostra o quadro num iframe, como antes
-        onFail: () => {
+        () => {
           thumb.classList.remove('is-loading');
           const iframe = _txMakeFrame(res, W, H);
-          iframe.addEventListener('load', () => _txSeek(iframe, TX_SAMPLE_DUR * 0.75));
+          iframe.addEventListener('load', () => _txSeek(iframe, posterAt));
           iframe.srcdoc = html;
           img.replaceWith(iframe);
         },
-      });
+      );
     }
     thumb.appendChild(img);
 
@@ -193,8 +154,6 @@ function _txBuildGrid() {
     card.addEventListener('mouseleave', _txStopHover);
     grid.appendChild(card);
   });
-
-  if (pending.length) _txFetchThumbs(pending, res);
 }
 
 function _txStopHover() {
@@ -586,13 +545,13 @@ async function startTranscription() {
   const clipId = modal._clipId;
   const clip   = window.__appState?.clips.find(c => c.id === clipId);
 
-  if (!clip) { alert('Clip não encontrado.'); return; }
+  if (!clip) { window.MSUI.notify('Clip não encontrado.'); return; }
 
   const txTmplId   = document.getElementById('txTmplSelect').value;
   const language   = document.getElementById('txLangSelect').value || '';
   const trackIndex = parseInt(document.getElementById('txTrackIndex').value) || 1;
 
-  if (!txTmplId) { alert('Selecione um template de texto.'); return; }
+  if (!txTmplId) { window.MSUI.notify('Selecione um template de texto.'); return; }
 
   const btnStart     = document.getElementById('btnStartTranscribe');
   const progress     = document.getElementById('txProgress');
@@ -603,6 +562,10 @@ async function startTranscription() {
   progress.style.display   = 'block';
   progressText.textContent = 'Preparando Whisper…';
   progressFill.style.width = '5%';
+
+  // Cartão de progresso fixo (continua com o modal fechado; clicar reabre)
+  const task = window.MSUI.task({ title: 'Transcrevendo o áudio', detail: progressText.textContent, progress: 0.05, onOpen: () => { modal.style.display = 'flex'; } });
+  const sync = () => task.update({ progress: (parseFloat(progressFill.style.width) || 0) / 100, detail: progressText.textContent });
 
   try {
     let tick = 0;
@@ -624,6 +587,7 @@ async function startTranscription() {
             : 'Transcrevendo em CPU — pode levar alguns minutos…';
           progressFill.style.width = '35%';
         }
+        sync();
       },
     });
 
@@ -641,13 +605,15 @@ async function startTranscription() {
     progressFill.style.width = '100%';
     _showTranscribeResult(result);
     btnStart.disabled = false;
+    task.done(`${created} legenda(s) criadas`);
 
   } catch (err) {
     progress.style.display = 'none';
     btnStart.disabled      = false;
+    task.fail(err.message || 'Falhou');
     console.error('[Transcribe] Erro:', err);
     _refreshWhisperStatus();
-    alert(`Erro na transcrição:\n${err.message}`);
+    window.MSUI.notify(`Erro na transcrição:\n${err.message}`);
   }
 }
 

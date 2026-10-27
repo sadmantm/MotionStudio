@@ -1,0 +1,100 @@
+/* audio-meter.css — medidor de dB e painel da track (audio-meter.js), seleção de track */
+
+/* #region Track selecionada */
+.tl-label.tl-label-selected {
+  background: var(--bg4);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.tl-label.tl-label-selected .tl-label-name { color: var(--accent); }
+.tl-row.tl-row-selected { background: rgba(130, 234, 0, .07) !important; }
+.tl-label { cursor: pointer; }
+/* #endregion */
+
+/* #region Medidores */
+.am-meters { display: flex; flex-direction: column; gap: 6px; }
+.am-meter { display: grid; grid-template-columns: 36px 1fr 14px; align-items: center; gap: 6px; }
+.am-label { font-size: 10px; font-weight: 700; color: var(--text-muted); }
+.am-bar {
+  position: relative;
+  height: 14px;
+  overflow: hidden;
+  border-radius: 3px;
+  background:
+    linear-gradient(90deg, transparent calc(85% - 1px), rgba(255, 255, 255, .18) calc(85% - 1px), rgba(255, 255, 255, .18) 85%, transparent 85%),
+    var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border2);
+}
+/* Verde até -18, amarelo até -6, vermelho perto de 0 (escala de -60 a 0 dB) */
+/* Largura total + clip-path: o degradê fica preso à escala de dB */
+.am-rms, .am-peak {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #3cbf4a 0%, #82ea00 60%, #e8c547 82%, #ff9a3c 92%, #ff3d50 100%);
+  clip-path: inset(0 100% 0 0);
+}
+.am-peak { opacity: .45; }
+.am-hold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  opacity: .85;
+}
+.am-hold.is-hot { background: #ff5a6a; }
+.am-clip {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 1px solid var(--border3);
+  border-radius: 50%;
+  background: var(--bg);
+  cursor: pointer;
+}
+.am-clip.is-on { background: #ff3d50; border-color: #ff3d50; box-shadow: 0 0 8px rgba(255, 61, 80, .7); }
+
+.am-scale {
+  position: relative;
+  height: 12px;
+  margin: 0 20px 0 42px;
+  font-size: 8.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.am-scale span { position: absolute; transform: translateX(-50%); }
+.am-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.am-readout b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+.am-status { flex-basis: 100%; font-size: 10.5px; color: var(--text-dim); }
+.am-status:empty { display: none; }
+/* #endregion */
+
+/* #region Painel da track */
+.am-vol .prop-range { flex: 1; min-width: 0; }
+.am-vol-val { width: 58px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; }
+.am-toggles { display: flex; gap: 6px; margin-top: 6px; }
+.am-toggle {
+  flex: 1;
+  height: 26px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  background: var(--bg3);
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.am-toggle:hover { color: var(--text); }
+.am-toggle.is-on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.am-note { margin: 6px 2px 0; font-size: 11px; line-height: 1.5; color: var(--text-muted); }
+.am-note:empty { display: none; }
+.am-bad { color: var(--danger); }
+.am-normalize { width: 100%; margin-top: 8px; font-size: 11px; }
+/* #endregion */

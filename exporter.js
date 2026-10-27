@@ -315,17 +315,24 @@ function planRenderWorkers(totalFrames, fps, requested, encoderName) {
 
 /**
  * Bitrate de vídeo (kbps) proporcional à área × fps.
- * ~0.20 bit/pixel/frame ≈ 25 Mbps em 1080p60. Encoders de hardware
- * (NVENC/QSV/AMF/VideoToolbox) recebem +30% porque comprimem pior que x264
- * no mesmo bitrate. Limites: 12–60 Mbps. VIDEO_BITRATE_KBPS=30000 fixa o valor.
+ * Qualidade "high" ≈ 0.20 bit/pixel/frame (≈ 25 Mbps em 1080p60); "normal"
+ * 0.12 e "max" 0.32. Encoders de hardware (NVENC/QSV/AMF/VideoToolbox)
+ * recebem +30% porque comprimem pior que x264 no mesmo bitrate.
+ * VIDEO_BITRATE_KBPS=30000 fixa o valor.
  */
-function computeVideoBitrateKbps(width, height, fps, encoderName) {
+const QUALITY_BITRATE = {
+  normal: { bpp: 0.12, min: 6000,  max: 40000 },
+  high:   { bpp: 0.20, min: 12000, max: 60000 },
+  max:    { bpp: 0.32, min: 20000, max: 90000 },
+};
+
+function computeVideoBitrateKbps(width, height, fps, encoderName, quality = 'high') {
   if (process.env.VIDEO_BITRATE_KBPS) return Number(process.env.VIDEO_BITRATE_KBPS);
-  const bitsPerPixelFrame = 0.20;
+  const preset = QUALITY_BITRATE[quality] || QUALITY_BITRATE.high;
   const isHardware = /nvenc|qsv|amf|videotoolbox/i.test(String(encoderName));
-  let kbps = (width * height * fps * bitsPerPixelFrame) / 1000;
+  let kbps = (width * height * fps * preset.bpp) / 1000;
   if (isHardware) kbps *= 1.3;
-  return Math.round(Math.max(12000, Math.min(60000, kbps)));
+  return Math.round(Math.max(preset.min, Math.min(preset.max, kbps)));
 }
 // #endregion
 
@@ -1278,7 +1285,7 @@ async function renderJob(jobId, clips, opts) {
     });
 
     // 3. Bitrate calibrado pela resolução/fps/encoder deste export.
-    const bitrateKbps = computeVideoBitrateKbps(width, height, fps, encoderName);
+    const bitrateKbps = computeVideoBitrateKbps(width, height, fps, encoderName, opts.quality);
     const outputPath  = path.join(tmpDir, `output.${format}`);
     console.log(
       `[Job ${jobId}] ${width}x${height}@${fps} · ${totalDuration.toFixed(2)}s · ` +
@@ -1301,7 +1308,7 @@ async function renderJob(jobId, clips, opts) {
       // 4. Publica a cena no servidor interno. Sem isto o Chromium recebe 404
       //    e o vídeo sai preto.
       sceneStore.set(`${jobId}_${chunk.index}`, buildFullScene(clips, width, height, root, projectRes, fps, {
-        totalDuration, from, to,
+        totalDuration, from, to, background: opts.background,
       }));
       // Um trecho só: direto no arquivo final. Vários: MP4 em MPEG-TS (emenda
       // sem recodificar e sem desalinhar B-frames), WebM em WebM.
@@ -1393,7 +1400,9 @@ async function renderJob(jobId, clips, opts) {
     // 6. Áudio dos clipes de vídeo e de áudio (o WVC captura só imagem).
     //    Volume 0 = mudo (clip, track mutada ou fora do solo): fica fora da mixagem.
     const soundClips = clips.filter(c =>
-      (c.type === 'video' || c.type === 'audio') && finiteNumber(c.volume, 1) > 0
+      (c.type === 'video' || c.type === 'audio') && finiteNumber(c.volume, 1) > 0 &&
+      // curva de keyframes toda em zero = mudo
+      (!Array.isArray(c.volumeKeys) || c.volumeKeys.some(k => finiteNumber(k.v, 0) > 0))
     );
     if (soundClips.length > 0) {
       updateJob(jobId, { progress: 99, message: 'Mixando áudio…' });
@@ -1482,8 +1491,10 @@ function buildMediaLayerHtmlGlobal(
   // corte) e o vídeo sairia 1 quadro adiantado. O fim é cortado logo depois
   // do trecho (+1 s de folga) para não pré-processar o que não aparece.
   const shownUntil = Math.min(start + duration, windowEnd + 1);
+  // Transição do próximo clip: na tela por mais `tail` s, parado no último quadro
+  const visibleUntil = Math.min(start + duration + fxTail(clip), windowEnd + 1);
   const chunkStart = start - timeOffset;
-  const chunkEnd   = shownUntil - timeOffset;
+  const chunkEnd   = visibleUntil - timeOffset;
 
   return `
 <div
@@ -1513,8 +1524,24 @@ function buildMediaLayerHtmlGlobal(
 </div>`;
 }
 
-function buildSceneRuntimeScript(totalDuration, fps, timeOffset = 0) {
+let _clipFxSource = null;
+
+/** O mesmo Interface/clip-fx.js do editor: efeitos iguais no preview e no export */
+function clipFxSource() {
+  if (_clipFxSource == null) {
+    try {
+      _clipFxSource = fs.readFileSync(path.join(getProjectRoot(), 'Interface', 'clip-fx.js'), 'utf8');
+    } catch (err) {
+      console.warn('[WVC] clip-fx.js indisponível — export sem efeitos:', err.message);
+      _clipFxSource = '';
+    }
+  }
+  return _clipFxSource;
+}
+
+function buildSceneRuntimeScript(totalDuration, fps, timeOffset = 0, fxScale = 1) {
   return `
+<script>${clipFxSource()}</script>
 <script>
 (function () {
   'use strict';
@@ -1523,6 +1550,8 @@ function buildSceneRuntimeScript(totalDuration, fps, timeOffset = 0) {
   var FPS   = ${JSON.stringify(fps)};
   // Export paralelo: o WVC conta quadros a partir do início deste trecho
   var OFFSET = ${JSON.stringify(timeOffset)};
+  // px do projeto → px do export (desfoque dos efeitos)
+  var FX_SCALE = ${JSON.stringify(fxScale)};
   // Modelos 3D/texturas/bibliotecas de CDN podem levar mais que fontes
   var READY_TIMEOUT_MS = 45000;
 
@@ -1600,7 +1629,27 @@ function buildSceneRuntimeScript(totalDuration, fps, timeOffset = 0) {
     layer.__start = number(layer.dataset.start, 0);
     layer.__dur   = Math.max(0.001, number(layer.dataset.dur, 1));
     layer.__end   = layer.__start + layer.__dur;
+    layer.__rot   = layer.style.transform || '';
+    if (layer.dataset.fx && window.ClipFX) {
+      try { layer.__fx = JSON.parse(layer.dataset.fx); } catch (_) { layer.__fx = null; }
+      // Transição do próximo clip: continua visível por baixo
+      if (layer.__fx) layer.__end += window.ClipFX.tailOf(layer.__fx);
+    }
   });
+
+  // Efeitos e transições (clip-fx.js) na caixa da camada
+  function applyFx(layer, time) {
+    if (!layer.__fx) return;
+    var fx = window.ClipFX.style(layer.__fx, time, FX_SCALE);
+    layer.style.opacity   = String(fx.opacity);
+    layer.style.filter    = fx.filter;
+    layer.style.clipPath  = fx.clipPath;
+    // rotação animada (keyframes) substitui a fixa da caixa
+    var rot = fx.rotation != null ? 'rotate(' + fx.rotation + 'deg)' : layer.__rot;
+    layer.style.transform = (fx.transform ? fx.transform + ' ' : '') + rot;
+    layer.style.mixBlendMode = fx.blend || '';
+    layer.style.backdropFilter = fx.backdropFilter || '';
+  }
 
   var htmlLayers = layers.filter(function (layer) {
     return layer.dataset.type === 'html';
@@ -1803,11 +1852,13 @@ function buildSceneRuntimeScript(totalDuration, fps, timeOffset = 0) {
           seekHtml(layer.__frame, mapped);
           if (layer.__frame.__ready) layer.__lastSeek = mapped;
         }
+        if (active) applyFx(layer, time);
         continue;
       }
 
       layer.style.display = active ? '' : 'none';
       if (type === 'text' && active) renderText(layer, time - layer.__start);
+      if (active) applyFx(layer, time);
     }
   }
 
@@ -2236,6 +2287,23 @@ async function materializeMediaForJob(
   }
 }
 
+/**
+ * Expressão do filtro `volume` (eval=frame) para keyframes de volume: rampa linear
+ * entre os pontos { t, v } (t em segundos do clip, já com o PTS zerado pelo atrim).
+ */
+function volumeExpr(keys) {
+  const f = x => Number(Number(x).toFixed(4));
+  let expr = String(f(keys[keys.length - 1].v));
+  for (let i = keys.length - 1; i > 0; i--) {
+    const a = keys[i - 1];
+    const b = keys[i];
+    const span = b.t - a.t;
+    const seg = span < 1e-4 ? String(f(b.v)) : `${f(a.v)}+(${f(b.v - a.v)})*(t-${f(a.t)})/${f(span)}`;
+    expr = `if(lt(t,${f(b.t)}),${seg},${expr})`;
+  }
+  return `if(lt(t,${f(keys[0].t)}),${f(keys[0].v)},${expr})`;
+}
+
 function finiteNumber(
   value,
   fallback = 0
@@ -2496,8 +2564,14 @@ async function mixAudioTracks(
       const volume  = Math.max(0, Math.min(1, finiteNumber(item.clip.volume, 1)));
       const fadeIn  = Math.min(duration / 2, Math.max(0, finiteNumber(item.clip.fadeIn)));
       const fadeOut = Math.min(duration / 2, Math.max(0, finiteNumber(item.clip.fadeOut)));
+      // Keyframes de volume: rampa linear entre pontos (t em segundos do clip, já após o atrim)
+      const keys = Array.isArray(item.clip.volumeKeys)
+        ? item.clip.volumeKeys.map(k => ({ t: Math.max(0, finiteNumber(k.t)), v: Math.max(0, Math.min(1, finiteNumber(k.v, 1))) })).sort((a, b) => a.t - b.t)
+        : [];
+      const volumeFilter = keys.length >= 2 ? `volume=eval=frame:volume='${volumeExpr(keys)}',`
+        : volume < 1 ? `volume=${volume.toFixed(3)},` : '';
       const shaping =
-        (volume < 1 ? `volume=${volume.toFixed(3)},` : '') +
+        volumeFilter +
         (fadeIn > 0 ? `afade=t=in:st=0:d=${fadeIn.toFixed(3)},` : '') +
         (fadeOut > 0 ? `afade=t=out:st=${(duration - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)},` : '');
 
@@ -2604,9 +2678,37 @@ async function mixAudioTracks(
   );
 }
 
+/** Segundos que o clip fica visível depois do fim (transição do próximo) */
+function fxTail(clip) {
+  const tail = clip.tailFx;
+  return tail && tail.type && tail.type !== 'none' ? Math.max(0, finiteNumber(tail.duration)) : 0;
+}
+
+/** Marca a camada com os efeitos do clip (lidos pelo runtime da cena) */
+function withFxData(html, clip) {
+  if (!clip.fx && !clip.tailFx && !clip.kf && !clip.cams && !clip.blend && !clip.adj) return html;
+  const data = {
+    start: finiteNumber(clip.start),
+    duration: Math.max(0.001, finiteNumber(clip.duration, 1)),
+    fx: clip.fx || null,
+    tailFx: clip.tailFx || null,
+    // keyframes de animação (chaves em segundos do clip) e a caixa fixa de referência
+    kf: clip.kf || null,
+    base: clip.kfBase || null,
+    // mesclagem, camada de ajuste e câmeras 2D acima (centro da caixa e quadro em px do projeto)
+    blend: clip.blend || null,
+    adj: Boolean(clip.adj),
+    cams: clip.cams || null,
+    center: clip.center || null,
+    frame: clip.frame || null,
+  };
+  return html.replace('data-ms-layer', `data-ms-layer data-fx="${escAttr(JSON.stringify(data))}"`);
+}
+
 /**
- * range (export paralelo): { totalDuration, from, to } — a cena do trecho
- * [from, to) leva só as camadas visíveis nele e começa o relógio em "from".
+ * range: { totalDuration, from, to, background } — no export paralelo a cena
+ * do trecho [from, to) leva só as camadas visíveis nele e começa o relógio
+ * em "from"; background é a cor de fundo do projeto (padrão preto).
  */
 function buildFullScene(
   clips,
@@ -2621,7 +2723,7 @@ function buildFullScene(
   const to   = range ? range.to : Infinity;
   const visibleInRange = clip => {
     const start = finiteNumber(clip.start);
-    return start < to && start + Math.max(0, finiteNumber(clip.duration)) > from;
+    return start < to && start + Math.max(0, finiteNumber(clip.duration)) + fxTail(clip) > from;
   };
 
   // Áudio não tem camada visual: entra só na mixagem final
@@ -2642,9 +2744,7 @@ function buildFullScene(
           )
     );
 
-  const layers =
-    orderedClips
-      .map(clip => {
+  const buildLayer = clip => {
         /*
          * Textos com HTML do template (o mesmo do preview) seguem o
          * caminho das camadas HTML. O renderizador genérico de texto
@@ -2681,8 +2781,12 @@ function buildFullScene(
           from,
           to
         );
-      })
-      .join('\n');
+  };
+
+  // Efeitos/transições (clip-fx.js): dados por camada, aplicados no runtime
+  const layers = orderedClips
+    .map(clip => withFxData(buildLayer(clip), clip))
+    .join('\n');
 
   const totalDuration = range ? range.totalDuration :
     clips.reduce(
@@ -2717,7 +2821,7 @@ body {
   width: ${width}px;
   height: ${height}px;
   overflow: hidden;
-  background: #000;
+  background: ${/^#[0-9a-f]{6}$/i.test(range?.background || '') ? range.background : '#000'};
 }
 
 #__ms_stage {
@@ -2725,6 +2829,9 @@ body {
   width: ${width}px;
   height: ${height}px;
   overflow: hidden;
+  /* grupo isolado com o fundo do projeto: os modos de mesclagem das camadas combinam com ele */
+  isolation: isolate;
+  background: ${/^#[0-9a-f]{6}$/i.test(range?.background || '') ? range.background : '#000'};
 }
 
 .__ms_html_host iframe {
@@ -2744,7 +2851,8 @@ ${layers}
 ${buildSceneRuntimeScript(
   totalDuration,
   fps,
-  from
+  from,
+  width / Math.max(1, finiteNumber(projectRes?.w, width))
 )}
 </body>
 </html>`;

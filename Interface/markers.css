@@ -1,0 +1,170 @@
+/* markers.css — marcadores e regiões na timeline (markers.js) */
+
+#tlMarkers {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 0;
+  z-index: 12;
+  pointer-events: none;   /* só as bandeirinhas e as bordas respondem */
+}
+
+/* Marcador */
+.tl-mk { position: absolute; top: 0; width: 0; }
+.tl-mk-line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  border-left: 1px dashed var(--mk);
+  opacity: .55;
+  pointer-events: none;
+}
+.tl-mk-flag {
+  position: absolute;
+  left: -1px;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 130px;
+  height: 14px;
+  padding: 0 6px 0 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--mk);
+  color: #0c0c10;
+  font-size: 9.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: grab;
+  pointer-events: auto;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+}
+.tl-mk-flag i { width: 3px; height: 14px; margin-left: -3px; background: rgba(0, 0, 0, .35); flex-shrink: 0; }
+.tl-mk-flag span { overflow: hidden; text-overflow: ellipsis; }
+.tl-mk-flag:hover { filter: brightness(1.12); }
+
+/* Região */
+.tl-mk-region { position: absolute; top: 0; pointer-events: none; }
+.tl-mk-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  background: color-mix(in srgb, var(--mk) 13%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--mk) 65%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--mk) 65%, transparent);
+  pointer-events: none;
+}
+.tl-mk-region.is-work .tl-mk-band { background: color-mix(in srgb, var(--mk) 10%, transparent); }
+.tl-mk-rbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mk);
+  color: #0c0c10;
+  font-size: 9.5px;
+  font-weight: 800;
+  border-radius: 3px 3px 0 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.tl-mk-rlabel { padding: 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: auto; cursor: grab; }
+.tl-mk-h { position: absolute; top: 0; bottom: 0; width: 7px; background: rgba(0, 0, 0, .35); cursor: ew-resize; pointer-events: auto; }
+.tl-mk-h-l { left: 0; border-radius: 3px 0 0 0; }
+.tl-mk-h-r { right: 0; border-radius: 0 3px 0 0; }
+.tl-mk-h:hover { background: rgba(0, 0, 0, .6); }
+body.tl-mk-dragging, body.tl-mk-dragging * { cursor: grabbing !important; }
+
+/* Menu de contexto */
+.tl-mk-menu {
+  position: fixed;
+  z-index: 10020;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid var(--border3);
+  border-radius: var(--radius);
+  background: var(--bg3);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .55);
+}
+.tl-mk-menu > button {
+  display: block;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.tl-mk-menu > button:hover { background: var(--bg4); }
+.tl-mk-menu .is-danger { color: var(--danger); }
+.tl-mk-colors { display: flex; gap: 5px; padding: 5px 9px; }
+.tl-mk-colors button { width: 16px; height: 16px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.tl-mk-colors button:hover { border-color: #fff; }
+
+/* Lista */
+.tl-mk-pop {
+  position: fixed;
+  z-index: 10020;
+  width: 300px;
+  max-height: 340px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border3);
+  border-radius: var(--radius);
+  background: var(--bg3);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .55);
+  font-size: 12px;
+}
+.tl-mk-pop-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.tl-mk-pop-head button { padding: 3px 9px; border: 1px solid var(--accent); border-radius: var(--radius-xs); background: none; color: var(--accent); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.tl-mk-item { display: flex; align-items: center; gap: 7px; padding: 4px 2px; border-top: 1px solid var(--border); }
+.tl-mk-item i { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.tl-mk-go { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-mk-go:hover { color: var(--accent); }
+.tl-mk-item span { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tl-mk-item > button:last-child { border: 0; background: none; color: var(--text-muted); cursor: pointer; }
+.tl-mk-item > button:last-child:hover { color: var(--danger); }
+.tl-mk-empty { margin: 8px 2px; color: var(--text-muted); line-height: 1.5; }
+.tl-mk-pop-foot { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 10.5px; }
+.tl-mk-pop kbd, kbd.kbd {
+  display: inline-block;
+  min-width: 14px;
+  padding: 0 4px;
+  border: 1px solid var(--border3);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--bg4);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+#btnTlMarker { position: relative; }
+#btnTlMarker[data-count]:not([data-count=""])::after {
+  content: attr(data-count);
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #0c0c10;
+  font-size: 8.5px;
+  font-weight: 800;
+  line-height: 13px;
+  text-align: center;
+}

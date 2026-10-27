@@ -6,6 +6,24 @@
   <title>Motion Studio</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="projects.css">
+  <link rel="stylesheet" href="library.css">
+  <link rel="stylesheet" href="timeline.css">
+  <link rel="stylesheet" href="ui-kit.css">
+  <link rel="stylesheet" href="markers.css">
+  <link rel="stylesheet" href="commands.css">
+  <link rel="stylesheet" href="ux.css">
+  <link rel="stylesheet" href="layers.css">
+  <link rel="stylesheet" href="camera.css">
+  <link rel="stylesheet" href="voice-recorder.css">
+  <link rel="stylesheet" href="project-settings.css">
+  <link rel="stylesheet" href="fx.css">
+  <link rel="stylesheet" href="fx-timeline.css">
+  <link rel="stylesheet" href="keyframes.css">
+  <link rel="stylesheet" href="curves.css">
+  <link rel="stylesheet" href="audio-meter.css">
+  <link rel="stylesheet" href="audio-tools.css">
+  <link rel="stylesheet" href="custom-assets.css">
   <link rel="icon" type="image/png" href="/Icon.png">
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </head>
@@ -25,11 +43,11 @@
 
     <nav class="menubar-nav">
       <div class="mb-menu" data-menu="cena">
-        <span>Cena</span>
+        <span>Arquivo</span>
         <div class="mb-dropdown">
           <div class="mb-item" id="mbImportHtml">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-            Importar HTML…
+            Importar mídia…
             <span class="mb-shortcut">Ctrl+I</span>
           </div>
           <div class="mb-item" id="mbPasteHtml">
@@ -40,7 +58,7 @@
           <div class="mb-divider"></div>
           <div class="mb-item" id="mbProjectProps">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
-            Propriedades do Projeto…
+            Configurações do projeto…
             <span class="mb-shortcut">Ctrl+Shift+P</span>
           </div>
           <div class="mb-divider"></div>
@@ -84,6 +102,7 @@
           <div class="mb-item" id="mbZoomFit">Encaixar Preview <span class="mb-shortcut">F</span></div>
           <div class="mb-item" data-tl-action="zoomFit">Ajustar Timeline à Tela <span class="mb-shortcut">Shift+Z</span></div>
           <div class="mb-divider"></div>
+          <div class="mb-item" id="mbPreviewPopout">Preview em janela separada…</div>
           <div class="mb-item disabled">Tela Cheia <span class="mb-shortcut">F11</span></div>
         </div>
       </div>
@@ -139,6 +158,10 @@
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/></svg>
         Colar
       </button>
+      <button class="tool-btn tool-btn-rec" data-action="record-voice" title="Gravar voz (narração) a partir do playhead">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v4"/></svg>
+        Voz
+      </button>
       <button class="tool-btn tool-btn-ai" id="btnAiPrompt" title="Criar/editar clipe com IA (Ctrl/⌘ + Espaço)">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
         IA
@@ -170,7 +193,7 @@
           <strong>Biblioteca</strong>
           <span>Assets do projeto</span>
         </div>
-        <button class="panel-icon-btn" id="btnPanelImport" title="Importar HTML">
+        <button class="panel-icon-btn" id="btnPanelImport" title="Importar mídia">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
         </button>
       </div>
@@ -179,40 +202,11 @@
         <button class="ptab active" data-tab="media">Mídia</button>
         <button class="ptab" data-tab="effects">Efeitos</button>
         <button class="ptab" data-tab="text">Texto</button>
-        <button class="ptab" data-tab="transitions">Trans.</button>
+        <button class="ptab" data-tab="transitions" title="Transições">Trans.</button>
       </div>
 
-      <div class="panel-tab-content active" id="tabMedia">
-        <div class="media-toolbar">
-          <button class="media-add-btn" id="btnAddMedia">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
-            Adicionar
-          </button>
-          <input class="media-search" placeholder="Buscar mídia…" id="mediaSearch">
-        </div>
-
-        <div class="media-info-strip">
-          <div class="media-info-card">
-            <span>Formato</span>
-            <strong>HTML</strong>
-          </div>
-          <div class="media-info-card">
-            <span>Uso</span>
-            <strong>Timeline</strong>
-          </div>
-        </div>
-
-        <div class="media-section-label">Clips importados</div>
-
-        <div id="mediaGrid" class="media-grid"></div>
-
-        <div id="mediaEmpty" class="media-empty">
-          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.25"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><polygon points="10,12 16,15.5 10,19"/></svg>
-          <p>Nenhuma mídia importada</p>
-          <small>Importe arquivos HTML ou cole um código para criar clips.</small>
-          <button class="media-empty-btn" id="btnEmptyImport">Importar HTMLs</button>
-        </div>
-      </div>
+      <!-- Biblioteca de assets: montada por library.js -->
+      <div class="panel-tab-content active" id="tabMedia"></div>
 
       <div class="panel-tab-content" id="tabEffects">
         <div class="coming-soon">
@@ -241,12 +235,16 @@
             <polygon points="10,12 16,15.5 10,19"/>
           </svg>
         </div>
-        <div class="empty-title">Importe HTMLs para começar</div>
-        <div class="empty-sub">Arraste arquivos .html aqui ou use Cena → Importar HTML.<br>Cada HTML será tratado como um clip independente na timeline.</div>
+        <div class="empty-title">Projeto vazio</div>
+        <div class="empty-sub">Importe vídeos, áudios, imagens ou HTMLs para a biblioteca e arraste para a timeline.<br>Também dá para gravar sua voz ou criar um clipe com IA.</div>
         <div class="empty-actions">
           <button class="empty-btn" id="btnEmptyImportCenter">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3 3 3-3"/></svg>
-            Importar HTMLs
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+            Importar mídia
+          </button>
+          <button class="empty-btn secondary" id="btnEmptyRecord" data-action="record-voice">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v4"/></svg>
+            Gravar voz
           </button>
           <button class="empty-btn secondary" id="btnEmptyPaste">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/></svg>
@@ -263,6 +261,9 @@
             <span id="previewZoomLabel">100%</span>
             <button class="pz-btn" id="btnPreviewZoomIn">+</button>
             <button class="pz-btn pz-fit" id="btnPreviewZoomFit">Fit</button>
+            <button class="pz-btn pz-popout" id="btnPreviewPopout" title="Abrir o preview numa janela separada (outro monitor)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h6v6M10 14L21 3M21 14v5a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5"/></svg>
+            </button>
           </div>
         </div>
 
@@ -348,6 +349,9 @@
         <div class="tl-toolbar-section tl-edit-section">
           <button class="tl-btn tl-tool-btn" id="btnTlSplit" title="Cortar no playhead (S)">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="22"/><path d="M2 8l4 4-4 4"/><path d="M22 8l-4 4 4 4"/></svg>
+          </button>
+          <button class="tl-btn tl-tool-btn" id="btnTlMarker" title="Marcadores e regiões (M adiciona um marcador)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/></svg>
           </button>
           <button class="tl-btn tl-tool-btn" id="btnTlDelete" title="Excluir clip (Del)">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
@@ -450,63 +454,6 @@
     </div>
   </div>
 
-  <div id="projectModal" class="modal-overlay" style="display:none">
-    <div class="modal modal-sm">
-      <div class="modal-header">
-        <div class="modal-header-icon">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
-        </div>
-        <span>Propriedades do Projeto</span>
-        <button class="icon-btn" id="btnCloseProject">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      </div>
-      <div class="modal-body">
-        <div class="form-row-2">
-          <div class="form-group">
-            <label>Largura (px)</label>
-            <input type="number" id="projWidth" class="prop-input full" value="1080" min="1" max="7680">
-          </div>
-          <div class="form-group">
-            <label>Altura (px)</label>
-            <input type="number" id="projHeight" class="prop-input full" value="1920" min="1" max="7680">
-          </div>
-        </div>
-        <div class="form-row-2">
-          <div class="form-group">
-            <label>Frame rate</label>
-            <select id="projFps" class="prop-input full">
-              <option value="24">24 fps</option>
-              <option value="25">25 fps</option>
-              <option value="30" selected>30 fps</option>
-              <option value="60">60 fps</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Fundo</label>
-            <div class="color-row">
-              <input type="color" id="projBg" value="#000000" class="prop-color-lg">
-              <input type="text" id="projBgHex" class="prop-input full" value="#000000" maxlength="7">
-            </div>
-          </div>
-        </div>
-        <div class="form-group">
-          <label>Preset rápido</label>
-          <div class="preset-grid">
-            <button class="preset-btn" data-w="1920" data-h="1080">1920×1080<small>16:9 FHD</small></button>
-            <button class="preset-btn" data-w="1080" data-h="1920">1080×1920<small>9:16 Reel</small></button>
-            <button class="preset-btn" data-w="1080" data-h="1080">1080×1080<small>1:1 Square</small></button>
-            <button class="preset-btn" data-w="3840" data-h="2160">3840×2160<small>4K UHD</small></button>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn-secondary" id="btnCancelProject">Cancelar</button>
-        <button class="export-btn" id="btnApplyProject">Aplicar</button>
-      </div>
-    </div>
-  </div>
-
   <div id="exportModal" class="modal-overlay" style="display:none">
     <div class="modal">
       <div class="modal-header">
@@ -545,6 +492,14 @@
             <label>Altura (px)</label>
             <input type="number" id="exportHeight" class="prop-input full" value="1920" min="640" max="3840" step="2">
           </div>
+        </div>
+        <div class="form-group">
+          <label for="exportQuality">Qualidade</label>
+          <select id="exportQuality" class="prop-input full" title="Taxa de bits do vídeo (o padrão vem das configurações do projeto)">
+            <option value="normal">Normal — arquivo menor</option>
+            <option value="high" selected>Alta — recomendado</option>
+            <option value="max">Máxima — arquivo maior</option>
+          </select>
         </div>
         <div class="form-group">
           <label for="exportWorkers">Renderização em paralelo</label>
@@ -621,12 +576,36 @@
 </div>
 
   <script src="../text-templates/textTemplateRegistry.js"></script>
+  <script src="ui-kit.js"></script>
+  <script src="posters.js"></script>
   <script src="../text-templates/texts.js"></script>
   <script src="../libs/transcribe.js"></script>
   <script src="app.js"></script>
+  <script src="projects.js"></script>
+  <script src="library.js"></script>
+  <script src="voice-recorder.js"></script>
+  <script src="project-settings.js"></script>
+  <script src="fx-panel.js"></script>
+  <script src="transform-panel.js"></script>
+  <script src="preview-window.js"></script>
+  <script src="audio-meter.js"></script>
+  <script src="audio-tools.js"></script>
+  <script src="audio-autocut.js"></script>
+  <script src="custom-assets.js"></script>
+  <script src="clip-fx.js"></script>
   <script src="compositor.js"></script>
   <script src="transform.js"></script>
   <script src="timeline-pro.js"></script>
+  <script src="fx-timeline.js"></script>
+  <script src="keyframes.js"></script>
+  <script src="curves.js"></script>
+  <script src="markers.js"></script>
+  <script src="commands.js"></script>
+  <script src="clip-bar.js"></script>
+  <script src="props-ux.js"></script>
+  <script src="layers.js"></script>
+  <script src="camera.js"></script>
+  <script src="camera-ai.js"></script>
   <script src="captions-editor.js"></script>
   <script src="group-edit.js"></script>
   <script src="../libs/sfx.js"></script>
@@ -650,7 +629,6 @@
   );
 
   document.getElementById('mbImportHtml')?.addEventListener('click', () => document.getElementById('fileInput').click());
-  document.getElementById('mbProjectProps')?.addEventListener('click', () => document.getElementById('projectModal').style.display='flex');
   document.getElementById('mbSplitClip')?.addEventListener('click',   () => window.splitCurrentScene?.());
   document.getElementById('mbDeleteClip')?.addEventListener('click',  () => window.deleteSelectedClips?.());
   document.getElementById('mbExport')?.addEventListener('click',      () => document.getElementById('btnExport').click());
@@ -660,7 +638,6 @@
 
   document.getElementById('btnQuickImport')?.addEventListener('click', () => document.getElementById('fileInput').click());
   document.getElementById('btnQuickSplit')?.addEventListener('click',  () => window.splitCurrentScene?.());
-  document.getElementById('btnQuickProject')?.addEventListener('click', () => document.getElementById('projectModal').style.display='flex');
   document.getElementById('btnPanelImport')?.addEventListener('click', () => document.getElementById('fileInput').click());
 
   document.getElementById('btnSplit')?.addEventListener('click',       () => window.splitCurrentScene?.());
@@ -685,25 +662,6 @@
   document.getElementById('btnStepFwd')?.addEventListener('click', () => {
     const s = window.__appState;
     window.seekTo?.(s.time + 1/(s?.project?.fps||30));
-  });
-
-  document.getElementById('btnCloseProject')?.addEventListener('click',  () => document.getElementById('projectModal').style.display='none');
-  document.getElementById('btnCancelProject')?.addEventListener('click', () => document.getElementById('projectModal').style.display='none');
-
-  document.querySelectorAll('.preset-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.getElementById('projWidth').value  = btn.dataset.w;
-      document.getElementById('projHeight').value = btn.dataset.h;
-    });
-  });
-
-  document.getElementById('projBg')?.addEventListener('input', e => {
-    document.getElementById('projBgHex').value = e.target.value;
-  });
-
-  document.getElementById('projBgHex')?.addEventListener('input', e => {
-    if (/^#[0-9a-f]{6}$/i.test(e.target.value))
-      document.getElementById('projBg').value = e.target.value;
   });
 
   (function() {

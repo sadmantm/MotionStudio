@@ -82,6 +82,8 @@ function pasteClipClipboard() {
         ...template,
         id: mkId(),
         textParams: template.textParams ? { ...template.textParams } : template.textParams,
+        inLibrary: false,
+        libraryId: template.libraryId || (template.inLibrary ? template.id : undefined),
       };
       state.templates.push(copy);
       templateId = copy.id;
@@ -148,10 +150,10 @@ function selectAllClips() {
   window.__onSelectionChange?.(sel);
 }
 
-function renameSelectedClip() {
+async function renameSelectedClip() {
   const clip = state.clips.find(c => c.id === state.currentClipId);
   if (!clip) return;
-  const name = window.prompt('Nome do clip:', clip.label);
+  const name = await window.MSUI.prompt({ title: 'Renomear clip', label: 'Nome do clip', value: clip.label, confirmLabel: 'Renomear' });
   if (name == null || !name.trim()) return;
   tlPushUndo();
   window.renameClip(clip.id, name);
@@ -192,37 +194,7 @@ document.addEventListener('click', e => {
   window.__runTimelineAction(item.dataset.tlAction);
 });
 
-document.addEventListener('keydown', e => {
-  if (isEditableTarget(e.target) || !state.project) return;
-  const mod = e.ctrlKey || e.metaKey;
-
-  // Redo: ⌘/Ctrl+Shift+Z ou Ctrl+Y (⌘/Ctrl+Z sem Shift fica com transform.js)
-  if (mod && ((e.code === 'KeyZ' && e.shiftKey) || e.code === 'KeyY')) {
-    e.preventDefault();
-    return window.__tlRedo?.();
-  }
-
-  if (mod && !e.shiftKey && !e.altKey) {
-    const byKey = { KeyC: 'copy', KeyX: 'cut', KeyA: 'selectAll', KeyD: 'duplicate' };
-    const action = byKey[e.code];
-    if (action) {
-      e.preventDefault();
-      return window.__runTimelineAction(action);
-    }
-  }
-
-  if (e.altKey && !mod && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
-    e.preventDefault();
-    return window.__runTimelineAction(e.code === 'ArrowUp' ? 'trackUp' : 'trackDown');
-  }
-
-  if (!mod && !e.altKey) {
-    if (e.shiftKey && e.code === 'KeyZ') { e.preventDefault(); return window.zoomTimelineToFit?.(); }
-    if (e.code === 'Home') { e.preventDefault(); return window.seekTo?.(0); }
-    if (e.code === 'End')  { e.preventDefault(); return window.seekTo?.(state.project.totalDuration); }
-    if (e.code === 'Escape' && getSelectedIds().size) { deselectClip(); }
-  }
-});
+// Teclado (desfazer, copiar, Del, Home/End, Esc…): registro de comandos em commands.js
 // #endregion
 
 // #region Áudio por clip (volume, mudo, fades) e por track (mute/solo)
@@ -232,7 +204,8 @@ window.__clipAudioGain = function clipAudioGain(clip, t) {
   const anySolo = state.tracks?.some(tr => tr.solo);
   if (clip.muted || track?.muted || (anySolo && !track?.solo)) return 0;
 
-  let gain = clamp(Number(clip.volume ?? 1), 0, 1);
+  // Keyframes de volume (audio-keyframes.js) substituem o volume fixo do clip
+  let gain = clamp(window.ClipKF?.volumeAt(clip, t) ?? Number(clip.volume ?? 1), 0, 1) * clamp(Number(track?.volume ?? 1), 0, 1);
   const elapsed   = t - clip.start;
   const remaining = clip.start + clip.duration - t;
   if (clip.fadeIn  > 0 && elapsed   < clip.fadeIn)  gain *= clamp(elapsed / clip.fadeIn, 0, 1);
@@ -252,7 +225,7 @@ window.previewClipAudio = function previewClipAudio(clipId, field, value) {
   }
   applyAudioField(clip, field, value);
   const label = document.getElementById('apVolumeVal');
-  if (label && field === 'volume') label.textContent = Math.round(clip.volume * 100) + '%';
+  if (label && field === 'volume') label.textContent = Math.round((window.ClipKF?.valueAt(clip, 'volume', state.time) ?? clip.volume) * 100) + '%';
 };
 
 window.setClipAudio = function setClipAudio(clipId, field, value) {
@@ -266,7 +239,7 @@ window.setClipAudio = function setClipAudio(clipId, field, value) {
 };
 
 function applyAudioField(clip, field, value) {
-  if (field === 'volume')  clip.volume  = clamp(Number(value) / 100, 0, 1);
+  if (field === 'volume' && !window.ClipKF?.handleVolumeInput(clip, clamp(Number(value) / 100, 0, 1))) clip.volume = clamp(Number(value) / 100, 0, 1);
   if (field === 'muted')   clip.muted   = Boolean(value);
   if (field === 'fadeIn')  clip.fadeIn  = clamp(Number(value) || 0, 0, clip.duration / 2);
   if (field === 'fadeOut') clip.fadeOut = clamp(Number(value) || 0, 0, clip.duration / 2);
@@ -275,17 +248,20 @@ function applyAudioField(clip, field, value) {
 
 window.__renderAudioProps = function renderAudioProps(clip, tmpl) {
   if (tmpl?.type !== 'video' && tmpl?.type !== 'audio') return '';
-  const vol = Math.round(clamp(Number(clip.volume ?? 1), 0, 1) * 100);
+  const vol = Math.round(clamp(window.ClipKF?.valueAt(clip, 'volume', state.time) ?? Number(clip.volume ?? 1), 0, 1) * 100);
   const id  = escapeHtml(clip.id);
   return `
     <div class="prop-section">
-      <div class="prop-title">Áudio</div>
+      <div class="prop-title fx-title">Áudio
+        <button class="fx-clear" data-audio-action="reset" data-clip-id="${id}" title="Volume 100%, sem mudo, sem fades e sem keyframes de volume">padrão</button>
+      </div>
       <div class="prop-row">
         <label>Volume</label>
-        <input type="range" min="0" max="100" step="1" value="${vol}" class="prop-range"
+        <input type="range" min="0" max="100" step="1" value="${vol}" class="prop-range" data-default="100"
           oninput="window.previewClipAudio('${id}', 'volume', this.value)"
           onchange="window.setClipAudio('${id}', 'volume', this.value)">
         <span class="prop-val" id="apVolumeVal" style="min-width:34px;text-align:right">${vol}%</span>
+        ${window.ClipKF?.controls(clip, 'volume') || ''}
       </div>
       <div class="prop-row">
         <label>Mudo</label>
@@ -303,6 +279,8 @@ window.__renderAudioProps = function renderAudioProps(clip, tmpl) {
           onchange="window.setClipAudio('${id}', 'fadeOut', this.value)">
       </div>
     </div>
+    ${window.__renderAudioToolsProps?.(clip, tmpl) || ''}
+    ${window.__renderAudioMeter?.(clip.trackIndex) || ''}
   `;
 };
 // #endregion
@@ -445,6 +423,27 @@ async function buildPeaks(tmpl, info) {
   }
 
   const data  = audio.getChannelData(0);
+
+  // Medidor de dB (audio-meter.js): pico e RMS absolutos a cada 50 ms
+  const LEVEL_RATE = 20;
+  const levelBlock = Math.max(1, Math.floor(audio.sampleRate / LEVEL_RATE));
+  const levelCount = Math.ceil(data.length / levelBlock);
+  const levelPeak = new Float32Array(levelCount);
+  const levelRms  = new Float32Array(levelCount);
+  for (let i = 0; i < levelCount; i++) {
+    let peak = 0, sum = 0;
+    const end = Math.min(data.length, (i + 1) * levelBlock);
+    for (let j = i * levelBlock; j < end; j++) {
+      const v = data[j];
+      sum += v * v;
+      const abs = v < 0 ? -v : v;
+      if (abs > peak) peak = abs;
+    }
+    levelPeak[i] = peak;
+    levelRms[i] = Math.sqrt(sum / Math.max(1, end - i * levelBlock));
+  }
+  info.levels = { rate: LEVEL_RATE, peak: levelPeak, rms: levelRms };
+
   const block = Math.max(1, Math.floor(audio.sampleRate / info.peaksRate));
   const peaks = new Float32Array(Math.ceil(data.length / block));
   let max = 0;
@@ -489,6 +488,14 @@ function drawPeaks(ctx, info, { width, height, centered, color, timeAt, secPerPx
   }
 }
 
+// Biblioteca (library.js): pôster, scrub no hover e forma de onda dos assets
+window.__whenMediaInfo = whenMediaInfo;
+
+/** Níveis absolutos (pico/RMS a 20/s) de uma mídia com áudio; null enquanto analisa */
+window.__mediaLevels = tmpl => (tmpl && (tmpl.type === 'audio' || tmpl.type === 'video'))
+  ? mediaInfoFor(tmpl).levels || null
+  : null;
+
 /** Card do painel de mídia: forma de onda do arquivo inteiro */
 window.__paintAudioThumb = function paintAudioThumb(canvas, tmpl) {
   whenMediaInfo(tmpl, info => info.peaks, info => {
@@ -501,18 +508,6 @@ window.__paintAudioThumb = function paintAudioThumb(canvas, tmpl) {
       width: w, height: h, centered: true, color: 'rgba(120, 200, 255, 0.85)',
       timeAt: px => px * duration / w, secPerPx: duration / w,
     });
-  });
-};
-
-/** Card do painel de mídia: quadro do meio do clipe HTML */
-window.__paintHtmlPoster = function paintHtmlPoster(container, tmpl) {
-  if (!isHtmlScene(tmpl)) return;
-  whenMediaInfo(tmpl, info => info.thumbs.length, info => {
-    if (!container.isConnected) return;
-    const img = document.createElement('img');
-    img.src = info.thumbs[Math.floor(info.thumbs.length / 2)].url;
-    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:inherit;';
-    container.insertBefore(img, container.querySelector('.media-thumb-num, .media-type-badge'));
   });
 };
 
@@ -550,6 +545,8 @@ window.__decorateClipBlock = function decorateClipBlock(block, clip, tmpl, pxPer
   if (tmpl.type !== 'video' && !isAudio && !isHtmlScene(tmpl)) return;
 
   const info = mediaInfoFor(tmpl);
+  // Esqueleto brilhando enquanto miniaturas/forma de onda ainda estão sendo geradas
+  layer.classList.toggle('tl-media-loading', (tmpl.type === 'video' && !info.thumbsDone) || (isAudio && !info.peaksDone) || (isHtmlScene(tmpl) && !info.thumbsDone));
   const span = visibleBlockSpan(clip, pxPerSec);
   if (!span) return;
   const [x0, x1] = span;

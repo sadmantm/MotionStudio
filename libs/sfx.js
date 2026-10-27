@@ -244,6 +244,13 @@
   // #region Biblioteca externa
   let libraryPromise = null;
   const sampleBytes = new Map();   // url → ArrayBuffer (cópia; decodeAudioData consome o original)
+  const sampleMeta = new Map();    // id → { sync, … } (ponto de sincronia do sfxkit)
+  const external = new Map();      // id → { url, … } (Openverse: baixado pelo servidor)
+
+  /** Sons de busca (Openverse) devolvidos pela IA: "ov/<id>" → { url, title, license… } */
+  function addExternal(map) {
+    Object.entries(map || {}).forEach(([id, info]) => { if (info?.url) external.set(id, info); });
+  }
 
   /** "<pacote>/<som>" → URL do arquivo (null se a biblioteca não tiver) */
   function loadLibrary() {
@@ -255,6 +262,7 @@
           const urls = new Map();
           libraries.forEach(lib => Object.entries(lib.files || {}).forEach(([id, f]) => {
             if (!urls.has(id)) urls.set(id, lib.base + f.path);
+            if (f.sync) sampleMeta.set(id, { sync: f.sync });
           }));
           if (!urls.size) libraryPromise = null;   // offline: tenta de novo depois
           return urls;
@@ -265,10 +273,25 @@
 
   /** Mesmo som em outro pacote quando o pedido não existe no pacote escolhido */
   function resolveSound(urls, id) {
+    if (external.has(id)) return external.get(id).url;
     if (urls.has(id)) return urls.get(id);
     const cue = id.split('/')[1];
     for (const [key, url] of urls) if (key.endsWith('/' + cue)) return url;
     return null;
+  }
+
+  /** Pico e começo audível (>3% do pico) de um som baixado: gravações externas vêm em níveis e com silêncios diferentes */
+  function measure(buffer) {
+    let peak = 0;
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const d = buffer.getChannelData(c);
+      for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); if (v > peak) peak = v; }
+    }
+    let onset = 0;
+    const lim = peak * 0.03;
+    const d0 = buffer.getChannelData(0);
+    for (let i = 0; i < d0.length; i++) { if (Math.abs(d0[i]) > lim) { onset = i / buffer.sampleRate; break; } }
+    return { peak, onset: Math.max(0, onset - 0.005) };
   }
 
   async function sampleBuffer(ctx, url) {
@@ -319,16 +342,42 @@
       used++;
       const g = ctx.createGain();
       g.gain.value = cue.gain;
+      let buf = null;
+      let sync = 0;
+      if (cue.type === 'sample') {
+        buf = samples.get(cue.sound);
+        if (external.has(cue.sound)) {
+          // Openverse: nivela o pico (~-3 dB) e corta o silêncio inicial → t = quando o som é ouvido
+          const m = measure(buf);
+          if (m.peak > 0.001) g.gain.value *= Math.min(4, 0.7 / m.peak);
+          sync = m.onset;
+        } else {
+          sync = sampleMeta.get(cue.sound)?.sync || 0;   // sfxkit: o ponto que encontra o momento
+        }
+        sync /= cue.pitch;
+      }
       const pan = ctx.createStereoPanner();
       pan.pan.value = cue.pan;
       g.connect(pan).connect(master);
       if (cue.type === 'sample') {
         const src = ctx.createBufferSource();
-        src.buffer = samples.get(cue.sound);
+        src.buffer = buf;
         src.playbackRate.value = cue.pitch;
         src.connect(g);
-        src.start(cue.t);
-        if (cue.dur > 0) src.stop(cue.t + cue.dur);
+        // começa `sync` antes do momento; se não cabe antes do 0, pula o início do arquivo
+        const at = cue.t - sync;
+        const skip = at < 0 ? -at * cue.pitch : 0;
+        const start = Math.max(0, at);
+        if (cue.dur > 0) {
+          // fade curto no corte (dur limita a duração do som)
+          const end = start + cue.dur;
+          g.gain.setValueAtTime(g.gain.value, Math.max(start, end - 0.04));
+          g.gain.linearRampToValueAtTime(0, end);
+          src.start(start, skip);
+          src.stop(end + 0.01);
+        } else {
+          src.start(start, skip);
+        }
       } else {
         RECIPES[cue.type](ctx, g, cue.t, cue);
       }
@@ -401,6 +450,6 @@
     });
   }
 
-  window.MotionSFX = { TYPES, normalizeCues, render, toWav, readCues, loadLibrary };
+  window.MotionSFX = { TYPES, normalizeCues, render, toWav, readCues, loadLibrary, addExternal };
   // #endregion
 })();

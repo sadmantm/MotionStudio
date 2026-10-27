@@ -1,0 +1,134 @@
+/* timeline.css — legibilidade da timeline (carregado depois de style.css)
+   Nome e duração dos clips ficavam por cima das miniaturas sem fundo, e
+   régua/labels usavam cores com contraste perto de 2:1. */
+
+/* #region Blocos */
+.tl-block {
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-top: 3px solid var(--clip-color, var(--accent));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+}
+.tl-block:hover { filter: none; border-color: rgba(255, 255, 255, .32); border-top-color: var(--clip-color, var(--accent)); }
+.tl-block.tl-selected {
+  border: 2px solid #fff;
+  border-top: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .6), 0 0 16px rgba(130, 234, 0, .35);
+  z-index: 3;
+}
+
+/* Miniaturas mais visíveis (o texto agora tem fundo próprio) */
+.tl-thumb { opacity: .82; }
+.tl-block-media.tl-media-image { opacity: .8; }
+
+.tl-block-meta {
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 4px 6px;
+}
+.tl-block-label,
+.tl-block-dur {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(8, 8, 12, .72);
+  color: #fff;
+  line-height: 15px;
+  text-shadow: none;
+}
+.tl-block-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+.tl-block-dur {
+  align-self: flex-end;
+  font-size: 10px;
+  color: rgba(255, 255, 255, .8);
+}
+/* Bloco estreito: só o nome (cortado); muito estreito: nada */
+.tl-block { container-type: inline-size; }
+@container (max-width: 110px) { .tl-block-dur { display: none; } }
+@container (max-width: 34px)  { .tl-block-label { display: none; } }
+
+.tl-block-locked { opacity: .55; }
+/* #endregion */
+
+/* #region Arraste */
+.tl-block.tl-drag-away { opacity: .3; }
+.tl-block.tl-drag-blocked {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger), 0 0 14px rgba(255, 68, 85, .35);
+}
+.tl-newtrack-ghost {
+  position: absolute;
+  z-index: 40;
+  display: none;
+  box-sizing: border-box;
+  border: 2px dashed var(--accent);
+  border-radius: 6px;
+  background: rgba(130, 234, 0, .14);
+  pointer-events: none;
+}
+.tl-newtrack-ghost span {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .78);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.tl-new-track-zone {
+  border-color: var(--border3);
+  color: var(--text-dim);
+}
+/* #endregion */
+
+/* #region Tracks, régua e playhead */
+.tl-label { background: var(--bg2); }
+.tl-label-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+}
+.tl-label-actions { opacity: .55; }
+.tl-label:hover .tl-label-actions { opacity: 1; }
+.tl-row:nth-child(odd)  { background: rgba(22, 22, 29, .9); }
+.tl-row:nth-child(even) { background: rgba(15, 15, 20, .9); }
+
+#tlRuler { background: var(--bg2); }
+.ruler-tick { color: var(--text-dim); font-size: 10px; }
+.ruler-tick.ruler-major {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ruler-tick::before { background: var(--border3); }
+.ruler-tick.ruler-major::before { background: var(--text-dim); }
+
+.ph-line { width: 2px; margin-left: -.5px; opacity: 1; box-shadow: 0 0 6px rgba(130, 234, 0, .45); }
+/* #endregion */
+
+/* #region Alça de altura da timeline: visível ao passar o mouse */
+#timeline > .panel-resize-handle[data-resize="timeline"]::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 44px;
+  height: 4px;
+  margin-left: -22px;
+  border-radius: 2px;
+  background: var(--border3);
+  opacity: 0;
+  transition: opacity .12s, background .12s;
+}
+#timeline > .panel-resize-handle[data-resize="timeline"]:hover::before {
+  opacity: 1;
+  background: var(--accent);
+}
+/* #endregion */

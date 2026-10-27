@@ -37,6 +37,7 @@ const state = {
   iframeReady:   false,
   seeking:       false,
   snapEnabled:   true,
+  selectedTrack: null,   // track ativa: cortar/apagar agem só nela
 };
 // #endregion
 
@@ -315,11 +316,6 @@ function syncProjectFormFields() {
   } = state.project;
 
   const fields = {
-    projWidth: res.w,
-    projHeight: res.h,
-    projFps: fps,
-    projBg: background,
-    projBgHex: background,
     exportWidth: res.w,
     exportHeight: res.h,
     exportFps: fps,
@@ -459,7 +455,128 @@ function refreshEditorAfterProjectChange({
   });
 }
 
-async function loadScenes(files) {
+/**
+ * Template (asset da biblioteca) a partir de um arquivo normalizado. Não
+ * coloca nada na timeline — ver createClipForTemplate.
+ */
+async function createTemplateFromInput(file, color) {
+  if (file.type === 'html') {
+    return {
+      id: mkId(),
+      name: file.name.replace(/\.html?$/i, ''),
+      type: 'html',
+      html: file.html,
+      sourceDuration: Math.max(MIN_CLIP_DURATION, extractDuration(file.html)),
+      fps: extractFps(file.html) || state.project.fps,
+      color,
+      inLibrary: true,
+    };
+  }
+
+  const media = {
+    id: mkId(),
+    name: file.name.replace(/\.\w+$/i, ''),
+    type: file.type,
+    dataUrl: file.dataUrl,
+    objectUrl: file.objectUrl || null,
+    isObjectUrl: Boolean(file.isObjectUrl || /^blob:/i.test(file.dataUrl)),
+    fileSize: Number(file.fileSize) || 0,
+    fps: state.project.fps,
+    color,
+    inLibrary: true,
+  };
+
+  if (file.type === 'video') {
+    return {
+      ...media,
+      mimeType: file.mimeType || 'video/mp4',
+      sourceDuration: Math.max(MIN_CLIP_DURATION, Number(file.duration) || await probeVideoDuration(file.dataUrl)),
+      res: {
+        w: Number(file.videoWidth || file.width) || state.project.res.w,
+        h: Number(file.videoHeight || file.height) || state.project.res.h,
+      },
+    };
+  }
+
+  if (file.type === 'image') {
+    return {
+      ...media,
+      mimeType: file.mimeType || 'image/png',
+      sourceDuration: projectImageDuration(),
+      res: {
+        w: Number(file.videoWidth || file.imageWidth || file.width) || state.project.res.w,
+        h: Number(file.videoHeight || file.imageHeight || file.height) || state.project.res.h,
+      },
+    };
+  }
+
+  return {
+    ...media,
+    mimeType: file.mimeType || 'audio/mpeg',
+    sourceDuration: Math.max(MIN_CLIP_DURATION, Number(file.duration) || await probeAudioDuration(file.dataUrl)),
+  };
+}
+
+/** Clip novo (ainda fora de state.clips) de um template, em `start` na track `trackIndex` */
+function createClipForTemplate(template, start, trackIndex) {
+  const duration = template.type === 'image'
+    ? projectImageDuration()
+    : Math.max(MIN_CLIP_DURATION, Number(template.sourceDuration) || DEFAULT_SCENE_DURATION);
+  const visual = template.type === 'video' || template.type === 'image';
+  return normalizeClip({
+    id: mkId(),
+    templateId: template.id,
+    label: template.name,
+    trackIndex,
+    start: Math.max(0, start),
+    duration,
+    trimStart: 0,
+    trimEnd: duration,
+    color: template.color || SCENE_COLORS[0],
+    ...(visual ? { _tx: _calcFitTx(template.res?.w || state.project.res.w, template.res?.h || state.project.res.h, state.project.res) } : {}),
+  });
+}
+
+/**
+ * Coloca templates da biblioteca na timeline, um após o outro a partir de `at`.
+ * Track: a pedida, se estiver livre no trecho; senão a 1ª livre acima.
+ * Áudio sempre numa track livre (não empurra o vídeo).
+ */
+function addTemplatesToTimeline(templateIds, { at = state.time, trackIndex = null, undo = true } = {}) {
+  if (!state.project) return [];
+  if (undo) window.__tlPushUndo?.();
+  const added = [];
+  let cursor = Math.max(0, Number(at) || 0);
+
+  templateIds.forEach(id => {
+    const template = state.templates.find(t => t.id === id);
+    if (!template) return;
+    const probe = createClipForTemplate(template, cursor, 0);
+    const end = probe.start + probe.duration;
+    const preferred = trackIndex ?? 0;
+    const track = window.__findFreeTrack?.(probe.start, end, preferred) ?? preferred;
+    probe.trackIndex = track;
+    window.getTrack?.(track);
+    state.clips.push(probe);
+    added.push(probe.id);
+    cursor = end;
+  });
+
+  if (!added.length) return [];
+  state.currentClipId = added[0];
+  state.project.updatedAt = new Date().toISOString();
+  refreshEditorAfterProjectChange({ mount: true, seek: true });
+  return added;
+}
+
+/**
+ * Importa arquivos normalizados. toTimeline=false: só biblioteca (import
+ * padrão, estilo CapCut). toTimeline=true: também entram na timeline a
+ * partir de `at` (ou emendados no fim, como antes).
+ * onTemplate(template, input) é chamado para cada asset criado (ex.: copiar
+ * a mídia para a pasta do projeto).
+ */
+async function loadScenes(files, { toTimeline = true, at = null, trackIndex = null, onTemplate = null } = {}) {
   const normalizedFiles = Array.from(files || [])
     .map((file, index) => normalizeSceneInput(file, index))
     .filter(Boolean);
@@ -482,236 +599,31 @@ async function loadScenes(files) {
     (a.type === 'audio') - (b.type === 'audio')
   );
 
-  // Áudio começa no playhead (timeline vazia: no zero)
-  const audioStart = state.clips.length
-    ? Math.max(0, Number(state.time) || 0)
-    : 0;
-
-  let cursor = state.clips.length
-    ? Math.max(
-        ...state.clips.map(
-          clip => clip.start + clip.duration
-        )
-      )
-    : 0;
-
-  const addedClipIds = [];
-
+  const templates = [];
   for (const file of normalizedFiles) {
-    const color =
-      SCENE_COLORS[
-        state.templates.length % SCENE_COLORS.length
-      ];
-
-    let template = null;
-    let clip = null;
-
-    if (file.type === 'html') {
-      const sourceDuration = Math.max(
-        MIN_CLIP_DURATION,
-        extractDuration(file.html)
-      );
-
-      template = {
-        id: mkId(),
-        name: file.name.replace(/\.html?$/i, ''),
-        type: 'html',
-        html: file.html,
-        sourceDuration,
-        fps: extractFps(file.html) || state.project.fps,
-        color,
-      };
-
-      clip = normalizeClip({
-        id: mkId(),
-        templateId: template.id,
-        label: template.name,
-        trackIndex: 0,
-        start: cursor,
-        duration: sourceDuration,
-        trimStart: 0,
-        trimEnd: sourceDuration,
-        color,
-      });
-    }
-
-    if (file.type === 'video') {
-      const duration = Math.max(
-        MIN_CLIP_DURATION,
-        Number(file.duration) ||
-          await probeVideoDuration(file.dataUrl)
-      );
-
-      const sourceWidth =
-        Number(file.videoWidth || file.width) ||
-        state.project.res.w;
-
-      const sourceHeight =
-        Number(file.videoHeight || file.height) ||
-        state.project.res.h;
-
-      template = {
-        id: mkId(),
-        name: file.name.replace(/\.\w+$/i, ''),
-        type: 'video',
-        dataUrl: file.dataUrl,
-        objectUrl: file.objectUrl || null,
-        isObjectUrl: Boolean(
-          file.isObjectUrl ||
-          /^blob:/i.test(file.dataUrl)
-        ),
-        mimeType: file.mimeType || 'video/mp4',
-        fileSize: Number(file.fileSize) || 0,
-        sourceDuration: duration,
-        fps: state.project.fps,
-        color,
-        res: {
-          w: sourceWidth,
-          h: sourceHeight,
-        },
-      };
-
-      clip = normalizeClip({
-        id: mkId(),
-        templateId: template.id,
-        label: template.name,
-        trackIndex: 0,
-        start: cursor,
-        duration,
-        trimStart: 0,
-        trimEnd: duration,
-        color,
-        _tx: _calcFitTx(
-          sourceWidth,
-          sourceHeight,
-          state.project.res
-        ),
-      });
-    }
-
-    if (file.type === 'image') {
-      const sourceWidth =
-        Number(
-          file.videoWidth ||
-          file.imageWidth ||
-          file.width
-        ) || state.project.res.w;
-
-      const sourceHeight =
-        Number(
-          file.videoHeight ||
-          file.imageHeight ||
-          file.height
-        ) || state.project.res.h;
-
-      template = {
-        id: mkId(),
-        name: file.name.replace(/\.\w+$/i, ''),
-        type: 'image',
-        dataUrl: file.dataUrl,
-        objectUrl: file.objectUrl || null,
-        isObjectUrl: Boolean(
-          file.isObjectUrl ||
-          /^blob:/i.test(file.dataUrl)
-        ),
-        mimeType: file.mimeType || 'image/png',
-        fileSize: Number(file.fileSize) || 0,
-        sourceDuration: DEFAULT_IMAGE_DURATION,
-        fps: state.project.fps,
-        color,
-        res: {
-          w: sourceWidth,
-          h: sourceHeight,
-        },
-      };
-
-      clip = normalizeClip({
-        id: mkId(),
-        templateId: template.id,
-        label: template.name,
-        trackIndex: 0,
-        start: cursor,
-        duration: DEFAULT_IMAGE_DURATION,
-        trimStart: 0,
-        trimEnd: DEFAULT_IMAGE_DURATION,
-        color,
-        _tx: _calcFitTx(
-          sourceWidth,
-          sourceHeight,
-          state.project.res
-        ),
-      });
-    }
-
-    if (file.type === 'audio') {
-      const duration = Math.max(
-        MIN_CLIP_DURATION,
-        Number(file.duration) ||
-          await probeAudioDuration(file.dataUrl)
-      );
-
-      template = {
-        id: mkId(),
-        name: file.name.replace(/\.\w+$/i, ''),
-        type: 'audio',
-        dataUrl: file.dataUrl,
-        objectUrl: file.objectUrl || null,
-        isObjectUrl: Boolean(
-          file.isObjectUrl ||
-          /^blob:/i.test(file.dataUrl)
-        ),
-        mimeType: file.mimeType || 'audio/mpeg',
-        fileSize: Number(file.fileSize) || 0,
-        sourceDuration: duration,
-        fps: state.project.fps,
-        color,
-      };
-
-      clip = normalizeClip({
-        id: mkId(),
-        templateId: template.id,
-        label: template.name,
-        trackIndex:
-          window.__findFreeTrack?.(
-            audioStart,
-            audioStart + duration
-          ) ?? 0,
-        start: audioStart,
-        duration,
-        trimStart: 0,
-        trimEnd: duration,
-        color,
-      });
-    }
-
-    if (!template || !clip) continue;
-
+    const color = SCENE_COLORS[state.templates.length % SCENE_COLORS.length];
+    const template = await createTemplateFromInput(file, color);
     state.templates.push(template);
-    state.clips.push(clip);
-    addedClipIds.push(clip.id);
-
-    if (template.type !== 'audio') {
-      cursor += clip.duration;
-    }
+    templates.push(template);
+    onTemplate?.(template, file);
   }
 
-  if (!addedClipIds.length) {
-    return [];
+  if (!toTimeline) {
+    state.project.updatedAt = new Date().toISOString();
+    renderMediaPanel();
+    const status = $('mbStatus');
+    if (status) status.textContent = `${templates.length} arquivo(s) na biblioteca`;
+    return templates.map(t => t.id);
   }
 
-  state.currentClipId = addedClipIds[0];
-
-  state.time =
-    state.clips.find(
-      clip => clip.id === state.currentClipId
-    )?.start || 0;
-
-  state.project.updatedAt = new Date().toISOString();
-
-  refreshEditorAfterProjectChange({
-    mount: true,
-    seek: true,
-  });
+  // Sem posição: visuais emendados no fim da track 0, áudio no playhead
+  const visual = templates.filter(t => t.type !== 'audio').map(t => t.id);
+  const audio  = templates.filter(t => t.type === 'audio').map(t => t.id);
+  const end    = state.clips.length ? Math.max(...state.clips.map(c => c.start + c.duration)) : 0;
+  const added  = [
+    ...addTemplatesToTimeline(visual, { at: at ?? end, trackIndex: trackIndex ?? 0 }),
+    ...addTemplatesToTimeline(audio, { at: at ?? (state.clips.length ? state.time : 0), trackIndex }),
+  ];
 
   const status = $('mbStatus');
 
@@ -719,7 +631,7 @@ async function loadScenes(files) {
     status.textContent = `${state.clips.length} clip(s)`;
   }
 
-  return addedClipIds;
+  return added;
 }
 
 function revokeCurrentProjectObjectUrls() {
@@ -768,6 +680,9 @@ function clearCurrentProjectRuntime() {
   );
 
   state.currentClipId = null;
+  state.selectedTrack = null;
+  state.markers = [];
+  state.tracks = [];
   state.time = 0;
   state.rafId = null;
   state.lastTimestamp = null;
@@ -779,6 +694,7 @@ function clearCurrentProjectRuntime() {
   state.snapEnabled = true;
 
   window.__selectedClipIds?.clear?.();
+  window.__tlResetHistory?.();
 
   $('previewWrapper')?.replaceChildren();
 
@@ -828,22 +744,11 @@ function createNewProject(options = {}) {
     state.templates.length
   );
 
-  if (
-    hasCurrentWork &&
-    options.confirm !== false
-  ) {
-    const accepted = window.confirm(
-      'Criar um novo projeto? Alterações não salvas serão perdidas.'
-    );
-
-    if (!accepted) {
-      return null;
-    }
-  }
+  // A confirmação ("alterações não salvas…") é feita pelo chamador, com MSUI.confirm (projectCommands.create)
 
   const width = clamp(
     Number(
-      options.width ?? $('projWidth')?.value
+      options.width
     ) || 1080,
     1,
     7680
@@ -851,7 +756,7 @@ function createNewProject(options = {}) {
 
   const height = clamp(
     Number(
-      options.height ?? $('projHeight')?.value
+      options.height
     ) || 1920,
     1,
     7680
@@ -859,7 +764,7 @@ function createNewProject(options = {}) {
 
   const fps = clamp(
     Number(
-      options.fps ?? $('projFps')?.value
+      options.fps
     ) || 30,
     1,
     240
@@ -867,7 +772,6 @@ function createNewProject(options = {}) {
 
   const backgroundCandidate = String(
     options.background ??
-    $('projBgHex')?.value ??
     '#000000'
   );
 
@@ -902,11 +806,7 @@ function createNewProject(options = {}) {
   }
 
   if (options.openSettings === true) {
-    const modal = $('projectModal');
-
-    if (modal) {
-      modal.style.display = 'flex';
-    }
+    window.MSProjectSettings?.open();
   }
 
   return project;
@@ -951,7 +851,9 @@ async function makeTemplatePortable(template) {
 
   if (
     portable.type !== 'html' &&
-    /^blob:/i.test(source)
+    portable.type !== 'text' &&
+    source &&
+    !/^data:/i.test(source)
   ) {
     const response = await fetch(source);
 
@@ -968,6 +870,8 @@ async function makeTemplatePortable(template) {
 
   delete portable.objectUrl;
   delete portable.isObjectUrl;
+  delete portable.mediaUrl;
+  delete portable.mediaFile;
 
   return portable;
 }
@@ -1001,6 +905,10 @@ async function buildMotionStudioProjectPayload() {
       state.clips
     ),
 
+    tracks: cloneSerializable(
+      state.tracks || []
+    ),
+
     editor: {
       currentClipId: state.currentClipId,
       time: state.time,
@@ -1008,6 +916,7 @@ async function buildMotionStudioProjectPayload() {
       trackZoom: state.trackZoom,
       previewZoom: state.previewZoom,
       snapEnabled: state.snapEnabled,
+      markers: window.__mkSnap?.() || [],
     },
   };
 }
@@ -1028,7 +937,7 @@ function sanitizeProjectFileName(value) {
 
 async function saveMotionStudioProject() {
   if (!state.project) {
-    alert(
+    window.MSUI.notify(
       'Crie ou abra um projeto antes de salvar.'
     );
 
@@ -1039,11 +948,12 @@ async function saveMotionStudioProject() {
     !state.project.name ||
     state.project.name === 'Projeto sem título'
   ) {
-    const chosenName = window.prompt(
-      'Nome do projeto:',
-      state.project.name ||
-      'Projeto sem título'
-    );
+    const chosenName = await window.MSUI.prompt({
+      title: 'Salvar projeto',
+      label: 'Nome do projeto',
+      value: state.project.name || 'Projeto sem título',
+      confirmLabel: 'Salvar',
+    });
 
     if (chosenName === null) {
       return false;
@@ -1109,7 +1019,7 @@ async function saveMotionStudioProject() {
       status.textContent = 'Erro ao salvar';
     }
 
-    alert(
+    window.MSUI.notify(
       `Não foi possível salvar o projeto: ${
         error.message || error
       }`
@@ -1194,6 +1104,172 @@ function validateMotionStudioProjectPayload(payload) {
   return payload;
 }
 
+/**
+ * Carrega um projeto (payload do .ms ou da biblioteca de projetos) no
+ * editor, substituindo o atual. Não pergunta nada: quem chama confirma.
+ */
+function applyProjectPayload(payload, fallbackName = '') {
+  clearCurrentProjectRuntime();
+
+  const project =
+    cloneSerializable(payload.project);
+
+  project.res = {
+    w: clamp(
+      Number(project.res?.w) || 1080,
+      1,
+      7680
+    ),
+
+    h: clamp(
+      Number(project.res?.h) || 1920,
+      1,
+      7680
+    ),
+  };
+
+  project.fps = clamp(
+    Number(project.fps) || DEFAULT_FPS,
+    1,
+    240
+  );
+
+  project.background =
+    /^#[0-9a-f]{6}$/i.test(
+      project.background || ''
+    )
+      ? project.background
+      : '#000000';
+
+  project.name = String(
+    project.name ||
+    fallbackName ||
+    'Projeto sem título'
+  );
+
+  project.totalDuration = 0;
+
+  state.project = project;
+
+  state.templates.push(
+    ...cloneSerializable(
+      payload.templates
+    )
+  );
+
+  state.clips.push(
+    ...cloneSerializable(payload.clips).map(
+      clip =>
+        normalizeClip({
+          ...clip,
+
+          id: clip.id || mkId(),
+
+          trackIndex: Math.max(
+            0,
+            Number(clip.trackIndex) || 0
+          ),
+
+          start: Math.max(
+            0,
+            Number(clip.start) || 0
+          ),
+
+          duration: Math.max(
+            MIN_CLIP_DURATION,
+            Number(clip.duration) ||
+            DEFAULT_SCENE_DURATION
+          ),
+
+          color:
+            clip.color ||
+            SCENE_COLORS[0],
+        })
+    )
+  );
+
+  // Projeto de antes da biblioteca (sem a marca inLibrary): cada mídia/HTML
+  // distinto vira um asset; cópias de corte (mesmo conteúdo) apontam para ele
+  if (!state.templates.some(t => 'inLibrary' in t)) {
+    const firstBySource = new Map();
+    state.templates.forEach(t => {
+      if (t.type === 'text' || t.textTmplId) return;
+      const source = t.type === 'html' ? t.html : (t.dataUrl || t.mediaUrl);
+      if (!source) return;
+      const first = firstBySource.get(source);
+      if (first) {
+        t.inLibrary = false;
+        t.libraryId = first.id;
+      } else {
+        t.inLibrary = true;
+        firstBySource.set(source, t);
+      }
+    });
+  }
+
+  // Tracks: nomes, bloqueio, mudo e solo (projetos antigos não tinham)
+  state.tracks = Array.isArray(payload.tracks)
+    ? cloneSerializable(payload.tracks)
+    : [];
+
+  const editor = payload.editor || {};
+
+  const requestedClipId =
+    editor.currentClipId;
+
+  state.currentClipId =
+    state.clips.some(
+      clip => clip.id === requestedClipId
+    )
+      ? requestedClipId
+      : state.clips[0]?.id || null;
+
+  state.time = Math.max(
+    0,
+    Number(editor.time) || 0
+  );
+
+  state.zoom = clamp(
+    Number(editor.zoom) || 1,
+    0.1,
+    16
+  );
+
+  state.trackZoom = clamp(
+    Number(editor.trackZoom) || 1,
+    0.4,
+    3
+  );
+
+  state.previewZoom = clamp(
+    Number(editor.previewZoom) || 1,
+    0.1,
+    4
+  );
+
+  state.snapEnabled =
+    editor.snapEnabled !== false;
+
+  state.markers = Array.isArray(editor.markers)
+    ? editor.markers.filter(m => m && Number.isFinite(Number(m.t))).map(m => ({ ...m }))
+    : [];
+
+  recalcProjectDuration();
+
+  state.time = clamp(
+    state.time,
+    0,
+    state.project.totalDuration || 0
+  );
+
+  refreshEditorAfterProjectChange({
+    mount: true,
+    seek: true,
+  });
+
+  return state.project;
+}
+
 async function openMotionStudioProject(file = null) {
   const selectedFile =
     file ||
@@ -1217,11 +1293,21 @@ async function openMotionStudioProject(file = null) {
         )
       );
 
+    // Com a biblioteca de projetos, o .ms vira um projeto novo dela
+    if (window.MSProjects) {
+      return window.MSProjects.importPayload(
+        payload,
+        selectedFile.name.replace(/\.ms$/i, '')
+      );
+    }
+
     if (
       (state.project || state.clips.length) &&
-      !window.confirm(
-        'Abrir este projeto? Alterações não salvas serão perdidas.'
-      )
+      !(await window.MSUI.confirm({
+        title: 'Abrir projeto',
+        message: 'Abrir este projeto? Alterações não salvas serão perdidas.',
+        confirmLabel: 'Abrir',
+      }))
     ) {
       if (status) {
         status.textContent =
@@ -1231,135 +1317,10 @@ async function openMotionStudioProject(file = null) {
       return false;
     }
 
-    clearCurrentProjectRuntime();
-
-    const project =
-      cloneSerializable(payload.project);
-
-    project.res = {
-      w: clamp(
-        Number(project.res?.w) || 1080,
-        1,
-        7680
-      ),
-
-      h: clamp(
-        Number(project.res?.h) || 1920,
-        1,
-        7680
-      ),
-    };
-
-    project.fps = clamp(
-      Number(project.fps) || DEFAULT_FPS,
-      1,
-      240
+    applyProjectPayload(
+      payload,
+      selectedFile.name.replace(/\.ms$/i, '')
     );
-
-    project.background =
-      /^#[0-9a-f]{6}$/i.test(
-        project.background || ''
-      )
-        ? project.background
-        : '#000000';
-
-    project.name = String(
-      project.name ||
-      selectedFile.name.replace(/\.ms$/i, '') ||
-      'Projeto sem título'
-    );
-
-    project.totalDuration = 0;
-
-    state.project = project;
-
-    state.templates.push(
-      ...cloneSerializable(
-        payload.templates
-      )
-    );
-
-    state.clips.push(
-      ...cloneSerializable(payload.clips).map(
-        clip =>
-          normalizeClip({
-            ...clip,
-
-            id: clip.id || mkId(),
-
-            trackIndex: Math.max(
-              0,
-              Number(clip.trackIndex) || 0
-            ),
-
-            start: Math.max(
-              0,
-              Number(clip.start) || 0
-            ),
-
-            duration: Math.max(
-              MIN_CLIP_DURATION,
-              Number(clip.duration) ||
-              DEFAULT_SCENE_DURATION
-            ),
-
-            color:
-              clip.color ||
-              SCENE_COLORS[0],
-          })
-      )
-    );
-
-    const editor = payload.editor || {};
-
-    const requestedClipId =
-      editor.currentClipId;
-
-    state.currentClipId =
-      state.clips.some(
-        clip => clip.id === requestedClipId
-      )
-        ? requestedClipId
-        : state.clips[0]?.id || null;
-
-    state.time = Math.max(
-      0,
-      Number(editor.time) || 0
-    );
-
-    state.zoom = clamp(
-      Number(editor.zoom) || 1,
-      0.1,
-      16
-    );
-
-    state.trackZoom = clamp(
-      Number(editor.trackZoom) || 1,
-      0.4,
-      3
-    );
-
-    state.previewZoom = clamp(
-      Number(editor.previewZoom) || 1,
-      0.1,
-      4
-    );
-
-    state.snapEnabled =
-      editor.snapEnabled !== false;
-
-    recalcProjectDuration();
-
-    state.time = clamp(
-      state.time,
-      0,
-      state.project.totalDuration || 0
-    );
-
-    refreshEditorAfterProjectChange({
-      mount: true,
-      seek: true,
-    });
 
     if (status) {
       status.textContent =
@@ -1377,7 +1338,7 @@ async function openMotionStudioProject(file = null) {
       status.textContent = 'Erro ao abrir';
     }
 
-    alert(
+    window.MSUI.notify(
       `Não foi possível abrir o projeto: ${
         error.message || error
       }`
@@ -1387,120 +1348,99 @@ async function openMotionStudioProject(file = null) {
   }
 }
 
-function applyProjectSettings() {
-  const width = clamp(
-    Number($('projWidth')?.value) || 1080,
-    1,
-    7680
-  );
-
-  const height = clamp(
-    Number($('projHeight')?.value) || 1920,
-    1,
-    7680
-  );
-
-  const fps = clamp(
-    Number($('projFps')?.value) || 30,
-    1,
-    240
-  );
-
-  const colorCandidate = String(
-    $('projBgHex')?.value ||
-    $('projBg')?.value ||
-    '#000000'
-  );
-
-  const background =
-    /^#[0-9a-f]{6}$/i.test(colorCandidate)
-      ? colorCandidate
-      : '#000000';
-
-  if (!state.project) {
-    ensureProject(null, {
-      res: {
-        w: width,
-        h: height,
-      },
-      fps,
-      background,
-    });
+/**
+ * Caixa (_tx) de um clip na resolução nova sem distorcer: quadro inteiro
+ * continua inteiro, mídia "encaixada" é reencaixada, o resto escala por
+ * igual em torno do centro (antes X e Y escalavam separados e 9:16 → 16:9
+ * esticava vídeos e imagens).
+ */
+function retargetClipTx(clip, prevRes, nextRes) {
+  const tx = clip._tx;
+  if (!tx) return null;
+  const near = (a, b) => Math.abs((Number(a) || 0) - b) < 1.5;
+  if (near(tx.x, 0) && near(tx.y, 0) && near(tx.w, prevRes.w) && near(tx.h, prevRes.h)) {
+    return { ...tx, x: 0, y: 0, w: nextRes.w, h: nextRes.h };
   }
 
-  const previousRes = {
-    ...state.project.res,
-  };
+  const tmpl = state.templates.find(t => t.id === clip.templateId);
+  if (tmpl?.res && (tmpl.type === 'video' || tmpl.type === 'image')) {
+    const prevFit = _calcFitTx(tmpl.res.w, tmpl.res.h, prevRes);
+    if (near(tx.x, prevFit.x) && near(tx.y, prevFit.y) && near(tx.w, prevFit.w) && near(tx.h, prevFit.h)) {
+      return { ...tx, ..._calcFitTx(tmpl.res.w, tmpl.res.h, nextRes), r: tx.r || 0 };
+    }
+  }
 
-  const scaleX =
-    width /
-    Math.max(1, previousRes.w);
+  const sx = nextRes.w / prevRes.w;
+  const sy = nextRes.h / prevRes.h;
+  const k  = Math.min(sx, sy);
+  const cx = ((Number(tx.x) || 0) + (Number(tx.w) || 0) / 2) * sx;
+  const cy = ((Number(tx.y) || 0) + (Number(tx.h) || 0) / 2) * sy;
+  const w  = Math.max(1, Math.round((Number(tx.w) || 1) * k));
+  const h  = Math.max(1, Math.round((Number(tx.h) || 1) * k));
+  return { ...tx, x: Math.round(cx - w / 2), y: Math.round(cy - h / 2), w, h };
+}
 
-  const scaleY =
-    height /
-    Math.max(1, previousRes.h);
+/** Aplica resolução, fps e fundo ao projeto aberto ({ width, height, fps, background }) */
+function applyProjectSettings(values = {}) {
+  if (!state.project) return;
 
-  state.project.res = {
-    w: width,
-    h: height,
-  };
+  const width = clamp(Math.round(Number(values.width) || state.project.res.w), 16, 7680);
+  const height = clamp(Math.round(Number(values.height) || state.project.res.h), 16, 7680);
+  const fps = clamp(Math.round(Number(values.fps) || state.project.fps), 1, 240);
+  const background = /^#[0-9a-f]{6}$/i.test(values.background || '')
+    ? values.background
+    : state.project.background || '#000000';
 
+  const previousRes = { ...state.project.res };
+  const resChanged = previousRes.w !== width || previousRes.h !== height;
+
+  if (resChanged || fps !== state.project.fps) {
+    window.__tlPushUndo?.();
+  }
+
+  state.project.res = { w: width, h: height };
   state.project.fps = fps;
   state.project.background = background;
+  state.project.updatedAt = new Date().toISOString();
 
-  state.project.updatedAt =
-    new Date().toISOString();
+  if (resChanged) {
+    state.clips.forEach(clip => {
+      const next = retargetClipTx(clip, previousRes, state.project.res);
+      if (next) clip._tx = next;
+    });
 
-  state.clips.forEach(clip => {
-    if (!clip._tx) return;
+    // Textos são gerados para a resolução do projeto: refaz o documento
+    state.templates.forEach(template => {
+      if (template.type === 'text' && template.textTmplId && template.textParams) {
+        template.html = window.__TextRegistry?.buildHtml(
+          template.textTmplId, template.textParams, state.project.res
+        ) || template.html;
+      }
+    });
+    if (typeof renderTextPanel === 'function') renderTextPanel();
 
-    clip._tx = {
-      ...clip._tx,
-
-      x: Math.round(
-        (Number(clip._tx.x) || 0) *
-        scaleX
-      ),
-
-      y: Math.round(
-        (Number(clip._tx.y) || 0) *
-        scaleY
-      ),
-
-      w: Math.max(
-        1,
-        Math.round(
-          (Number(clip._tx.w) || 1) *
-          scaleX
-        )
-      ),
-
-      h: Math.max(
-        1,
-        Math.round(
-          (Number(clip._tx.h) || 1) *
-          scaleY
-        )
-      ),
-    };
-  });
+    // O compositor guarda iframe e transformação de cada clip na resolução
+    // antiga: desmonta tudo para remontar no tamanho novo
+    window.__Compositor?.allIds().forEach(id => window.__Compositor.unmount(id));
+  }
 
   refreshEditorAfterProjectChange({
     mount: true,
     seek: true,
   });
 
-  const modal = $('projectModal');
-
-  if (modal) {
-    modal.style.display = 'none';
+  // Caixa de seleção do preview acompanha o reenquadramento (depois do resize do palco)
+  if (resChanged) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.__refreshTransformOverlay?.();
+    }));
   }
 
   const status = $('mbStatus');
 
   if (status) {
     status.textContent =
-      'Propriedades atualizadas';
+      'Configurações aplicadas';
   }
 }
 
@@ -1589,12 +1529,74 @@ function configureProjectMenuItems() {
     );
   }
 
+  // Exportar/importar um arquivo .ms (compartilhar o projeto com outro PC)
+  let exportItem = $('mbExportMs');
+
+  if (!exportItem && saveItem) {
+    exportItem = createProjectMenuItem({
+      id: 'mbExportMs',
+      label: 'Exportar arquivo .ms…',
+      shortcut: '',
+      iconPath: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3',
+    });
+
+    openItem?.after(exportItem);
+  }
+
+  let importItem = $('mbImportMs');
+
+  if (!importItem && exportItem) {
+    importItem = createProjectMenuItem({
+      id: 'mbImportMs',
+      label: 'Importar arquivo .ms…',
+      shortcut: '',
+      iconPath: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12',
+    });
+
+    exportItem.after(importItem);
+  }
+
+  if (openItem) {
+    openItem.childNodes.forEach(node => {
+      if (node.nodeType === 3 && node.nodeValue.includes('Abrir Projeto')) {
+        node.nodeValue = 'Projetos… ';
+      }
+    });
+  }
+
   return {
     newItem,
     saveItem,
     openItem,
+    exportItem,
+    importItem,
   };
 }
+
+/** Com a biblioteca de projetos (projects.js) os comandos de arquivo passam por ela */
+const projectCommands = {
+  create: () => window.MSProjects
+    ? window.MSProjects.showHome({ create: true })
+    : (async () => {
+        if ((state.project || state.clips.length || state.templates.length) && !(await window.MSUI.confirm({
+          title: 'Novo projeto',
+          message: 'Criar um novo projeto? Alterações não salvas serão perdidas.',
+          confirmLabel: 'Criar',
+        }))) return null;
+        return createNewProject({ confirm: false });
+      })(),
+
+  save: () => window.MSProjects?.currentId()
+    ? window.MSProjects.saveNow({ thumb: true }).then(() => {
+        const status = $('mbStatus');
+        if (status) status.textContent = 'Projeto salvo';
+      }).catch(() => {})
+    : saveMotionStudioProject(),
+
+  open: () => window.MSProjects
+    ? window.MSProjects.showHome()
+    : openMotionStudioProject(),
+};
 
 function initProjectFileActions() {
   window.__motionStudioProjectController?.abort();
@@ -1614,53 +1616,35 @@ function initProjectFileActions() {
 
   menu.newItem?.addEventListener(
     'click',
-    () => createNewProject(),
+    projectCommands.create,
     options
   );
 
   menu.saveItem?.addEventListener(
     'click',
-    saveMotionStudioProject,
+    projectCommands.save,
     options
   );
 
   menu.openItem?.addEventListener(
     'click',
+    projectCommands.open,
+    options
+  );
+
+  menu.exportItem?.addEventListener(
+    'click',
+    saveMotionStudioProject,
+    options
+  );
+
+  menu.importItem?.addEventListener(
+    'click',
     () => openMotionStudioProject(),
     options
   );
 
-  $('btnApplyProject')?.addEventListener(
-    'click',
-    applyProjectSettings,
-    options
-  );
-
-  document.addEventListener(
-    'keydown',
-    event => {
-      const modifier =
-        event.ctrlKey || event.metaKey;
-
-      if (!modifier) return;
-
-      if (event.code === 'KeyN') {
-        event.preventDefault();
-        createNewProject();
-      }
-
-      if (event.code === 'KeyS') {
-        event.preventDefault();
-        saveMotionStudioProject();
-      }
-
-      if (event.code === 'KeyO') {
-        event.preventDefault();
-        openMotionStudioProject();
-      }
-    },
-    options
-  );
+  // Ctrl+N / Ctrl+S / Ctrl+O: comandos 'project-*' em commands.js
 }
 
 function initMotionStudioProjectSystem() {
@@ -1776,7 +1760,7 @@ function probeImageFile(file, objectUrl) {
   });
 }
 
-async function handleMediaFiles(fileList) {
+async function handleMediaFiles(fileList, options = {}) {
   const allowed = Array.from(
     fileList || []
   ).filter(file =>
@@ -1793,7 +1777,7 @@ async function handleMediaFiles(fileList) {
   );
 
   if (!allowed.length) {
-    alert(
+    window.MSUI.notify(
       'Nenhum arquivo suportado (.html, .mp4, .webm, .jpg, .png, .mp3, .wav…).'
     );
 
@@ -1826,6 +1810,11 @@ async function handleMediaFiles(fileList) {
     status.textContent =
       `Importando ${allowed.length} arquivo(s)…`;
   }
+
+  // Importar vários ou grandes: cartão de progresso (a mídia sobe para a pasta do projeto)
+  const importTask = (allowed.length > 2 || allowed.some(f => f.size > 30e6))
+    ? window.MSUI.task({ title: `Importando ${allowed.length} arquivo(s)`, detail: 'Lendo os arquivos…', progress: 0.05 })
+    : null;
 
   const results = await Promise.all(
     allowed.map(async file => {
@@ -1930,6 +1919,10 @@ async function handleMediaFiles(fileList) {
     })
   );
 
+  results.forEach((result, index) => {
+    if (result) result.file = allowed[index];
+  });
+
   const validResults =
     results.filter(Boolean);
 
@@ -1939,14 +1932,35 @@ async function handleMediaFiles(fileList) {
         'Falha na importação';
     }
 
-    alert(
+    window.MSUI.notify(
       'Não foi possível importar os arquivos selecionados.'
     );
+    importTask?.fail('Nenhum arquivo pôde ser importado');
 
     return [];
   }
 
-  return loadScenes(validResults);
+  importTask?.update({ progress: 0.25, detail: 'Salvando no projeto…' });
+  let saved = 0;
+
+  // Padrão (estilo CapCut): só a biblioteca. Soltar na timeline passa
+  // toTimeline/at/trackIndex para colocar no lugar certo.
+  try {
+    const loaded = await loadScenes(validResults, {
+      toTimeline: false,
+      ...options,
+      onTemplate: async (template, input) => {
+        const out = await window.MSProjects?.persistMedia(template, input.file);
+        importTask?.update({ progress: 0.25 + 0.75 * (++saved / validResults.length), detail: input.file?.name || template.name });
+        return out;
+      },
+    });
+    importTask?.done(`${validResults.length} arquivo(s) na biblioteca`);
+    return loaded;
+  } catch (err) {
+    importTask?.fail(err.message || 'Falha na importação');
+    throw err;
+  }
 }
 
 function getMotionStudioState() {
@@ -2119,7 +2133,7 @@ function openPasteHtmlModal(
       );
 
     if (!editable) {
-      alert(
+      window.MSUI.notify(
         'Este clipe não possui um HTML editável.'
       );
 
@@ -2297,7 +2311,7 @@ function openHtmlClipEditor(
     !appState ||
     !editable
   ) {
-    alert(
+    window.MSUI.notify(
       'Este clipe não possui um HTML editável.'
     );
 
@@ -2640,7 +2654,7 @@ async function confirmPasteHtml() {
       html
     )
   ) {
-    alert(
+    window.MSUI.notify(
       'Informe um código HTML válido.'
     );
 
@@ -2703,7 +2717,7 @@ async function confirmPasteHtml() {
       error
     );
 
-    alert(
+    window.MSUI.notify(
       `Não foi possível salvar o HTML: ${
         error.message ||
         error
@@ -3024,6 +3038,11 @@ function initPasteHtmlFlow() {
 
 // #region Carregamento de Projeto / Templates
 const DEFAULT_IMAGE_DURATION = 5;   // segundos estáticos por padrão para imagens
+
+/** Duração de uma imagem nova na timeline (Configurações → Editor) */
+function projectImageDuration() {
+  return Number(state.project?.settings?.imageDuration) || DEFAULT_IMAGE_DURATION;
+}
 const DEFAULT_VIDEO_DURATION = 10;  // fallback caso não consigamos ler metadados
 
 /**
@@ -3224,6 +3243,8 @@ function renderProjectSettings() {
       window.__renderGroupProps(propsContent);
     } else if (clip?.isText) {
       window.renderTextClipProps(clip);
+      propsContent.insertAdjacentHTML('beforeend',
+        (window.__renderTransformProps?.(clip, tmpl) || '') + (window.__renderFxProps?.(clip, tmpl) || '') + (window.__renderAnimProps?.(clip, tmpl) || ''));
 
       const previewName = $('previewClipName');
 
@@ -3405,6 +3426,16 @@ function renderProjectSettings() {
               : ''
           }
 
+          ${window.__renderCameraProps?.(clip, tmpl) || ''}
+
+          ${window.__renderLayerProps?.(clip, tmpl) || ''}
+
+          ${window.__renderTransformProps?.(clip, tmpl) || ''}
+
+          ${window.__renderFxProps?.(clip, tmpl) || ''}
+
+          ${window.__renderAnimProps?.(clip, tmpl) || ''}
+
           ${window.__renderAudioProps?.(clip, tmpl) || ''}
 
           <div class="prop-section">
@@ -3460,9 +3491,9 @@ function renderProjectSettings() {
             </div>
           </div>
         `
-        : `
+        : window.__renderTrackPanel?.(state.selectedTrack) || `
           <div class="props-empty">
-            Selecione um clip na timeline
+            Selecione um clip ou uma track na timeline
           </div>
         `;
     }
@@ -3476,90 +3507,61 @@ function renderProjectSettings() {
   }
 
   if (projectContent) {
+    const guides = window.MSProjectSettings?.settings().guides || {};
+
     projectContent.innerHTML = `
       <div class="prop-section">
-        <div class="prop-title">
-          Sequência
-        </div>
+        <div class="prop-title">${escapeHtml(state.project.name || 'Projeto')}</div>
 
         <div class="prop-row">
           <label>Resolução</label>
-
-          <span class="prop-val">
-            ${res.w} × ${res.h}
-          </span>
+          <span class="prop-val">${res.w} × ${res.h}</span>
         </div>
 
         <div class="prop-row">
           <label>FPS</label>
-
-          <span class="prop-val">
-            ${fps}
-          </span>
+          <span class="prop-val">${fps}</span>
         </div>
 
         <div class="prop-row">
-          <label>Duração total</label>
-
-          <span class="prop-val">
-            ${fmtTime(
-              state.project.totalDuration
-            )}
-          </span>
+          <label>Fundo</label>
+          <span class="prop-val"><span class="prop-swatch" style="background:${escapeHtml(state.project.background || '#000')}"></span>${escapeHtml(state.project.background || '#000000')}</span>
         </div>
 
         <div class="prop-row">
-          <label>Total de clips</label>
-
-          <span class="prop-val">
-            ${state.clips.length}
-          </span>
+          <label>Duração</label>
+          <span class="prop-val">${fmtTime(state.project.totalDuration)}</span>
         </div>
 
         <div class="prop-row">
-          <label>Frames totais</label>
-
-          <span class="prop-val">
-            ${Math.round(
-              state.project.totalDuration * fps
-            )}
-          </span>
+          <label>Clips</label>
+          <span class="prop-val">${state.clips.length}</span>
         </div>
       </div>
 
       <div class="prop-section">
-        <div class="prop-title">
-          Opções
-        </div>
+        <div class="prop-title">Editor</div>
 
         <div class="prop-row">
           <label>Snap</label>
+          <input type="checkbox" data-project-toggle="snap" ${state.snapEnabled ? 'checked' : ''}>
+        </div>
 
-          <input
-            type="checkbox"
-            ${state.snapEnabled ? 'checked' : ''}
-            onchange="
-              state.snapEnabled=this.checked;
-              document.getElementById(
-                'btnTlSnap'
-              ).dataset.active=this.checked
-            "
-          >
+        <div class="prop-row">
+          <label>Área segura</label>
+          <input type="checkbox" data-project-toggle="safeArea" ${guides.safeArea ? 'checked' : ''}>
+        </div>
+
+        <div class="prop-row">
+          <label>Grade de terços</label>
+          <input type="checkbox" data-project-toggle="thirds" ${guides.thirds ? 'checked' : ''}>
         </div>
       </div>
 
       <div class="prop-section">
-        <div class="prop-row">
-          <button
-            class="btn-secondary"
-            style="font-size:11px"
-            onclick="
-              document.getElementById(
-                'projectModal'
-              ).style.display='flex'
-            "
-          >
-            ⚙ Propriedades do Projeto…
+        <div class="prop-row prop-row-btn">
+          <button class="btn-secondary" data-action="project-settings" style="font-size:11px;width:100%">
+            ⚙ Configurações do projeto…
           </button>
         </div>
       </div>
@@ -3673,138 +3675,27 @@ document.querySelectorAll('.ptab').forEach(btn => {
 });
 // #endregion
 
-// #region Lista de Cenas/Clips (painel esquerdo)
-function renderMediaPanel() {
-  if (!mediaGrid) return;
-  mediaGrid.innerHTML = '';
-
-  if (!state.clips.length) {
-    if (mediaEmpty) mediaEmpty.style.display = 'flex';
+projectContent?.addEventListener('change', e => {
+  const toggle = e.target.closest('[data-project-toggle]');
+  if (!toggle || !state.project) return;
+  const key = toggle.dataset.projectToggle;
+  if (key === 'snap') {
+    state.snapEnabled = toggle.checked;
+    const button = $('btnTlSnap');
+    if (button) button.dataset.active = String(toggle.checked);
     return;
   }
-  if (mediaEmpty) mediaEmpty.style.display = 'none';
+  const settings = window.MSProjectSettings?.settings();
+  if (!settings) return;
+  settings.guides = { ...settings.guides, [key]: toggle.checked };
+  window.MSProjectSettings.renderGuides();
+});
 
-  const q = ($('mediaSearch')?.value || '').toLowerCase().trim();
-  const captionGroups = new Map();
-
-  state.clips.forEach((clip, i) => {
-    // Legendas da transcrição viram um único card por grupo (antes: 1 card por legenda)
-    if (clip.captionGroupId) {
-      const group = captionGroups.get(clip.captionGroupId);
-      if (group) { group.count++; return; }
-      const card = document.createElement('div');
-      card.className = 'media-card';
-      card.dataset.clipId = clip.id;
-      card.innerHTML = `
-        <div class="media-thumb" style="background:${escapeHtml(clip.color || 'var(--bg4)')}">
-          <span class="media-type-badge">CC Legendas</span>
-        </div>
-        <div class="media-card-info">
-          <div class="media-card-name">Legendas</div>
-          <div class="media-card-dur"></div>
-        </div>
-      `;
-      card.addEventListener('click', () => window.openCaptionsEditor?.(clip.id));
-      captionGroups.set(clip.captionGroupId, { count: 1, card });
-      mediaGrid.appendChild(card);
-      return;
-    }
-
-    if (q && !clip.label.toLowerCase().includes(q)) return;
-
-    const tmpl = state.templates.find(t => t.id === clip.templateId);
-
-    const card = document.createElement('div');
-    card.className = 'media-card' + (clip.id === state.currentClipId ? ' active' : '');
-    card.dataset.clipId = clip.id;
-
-    // Badge de tipo
-    const typeLabel = tmpl?.type === 'video' ? '▶ Vídeo'
-                    : tmpl?.type === 'image' ? '🖼 Imagem'
-                    : tmpl?.type === 'audio' ? '♪ Áudio'
-                    : '⬡ HTML';
-
-    card.innerHTML = `
-      <div class="media-thumb">
-        <div class="media-thumb-num">${i + 1}</div>
-        <span class="media-type-badge">${typeLabel}</span>
-      </div>
-      <div class="media-card-info">
-        <div class="media-card-name" title="${escapeHtml(clip.label)}">${escapeHtml(clip.label)}</div>
-        <div class="media-card-dur">${fmtTime(clip.duration)}</div>
-      </div>
-    `;
-
-    const thumb = card.querySelector('.media-thumb');
-
-    if (!tmpl) {
-      thumb.style.background = clip.color || '#000';
-
-    } else if (tmpl.type === 'image') {
-      // Imagem direta no thumbnail
-      const img = document.createElement('img');
-      img.src = tmpl.dataUrl;
-      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;';
-      thumb.appendChild(img);
-
-    } else if (tmpl.type === 'video') {
-      // Captura primeiro frame via <video> + <canvas>
-      const canvas = document.createElement('canvas');
-      canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit;';
-      thumb.appendChild(canvas);
-      captureVideoFrame(tmpl.dataUrl, canvas);
-
-    } else if (tmpl.type === 'audio') {
-      thumb.classList.add('media-thumb-audio');
-      const canvas = document.createElement('canvas');
-      canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border-radius:inherit;';
-      thumb.appendChild(canvas);
-      window.__paintAudioThumb?.(canvas, tmpl);
-
-    } else {
-      // HTML — comportamento original
-      mountMediaThumbnail(thumb, tmpl);
-    }
-
-    card.addEventListener('click', () => {
-      selectClip(clip.id);
-      window.seekTo?.(clip.start);
-    });
-    card.addEventListener('dblclick', () => window.seekTo?.(clip.start));
-
-    mediaGrid.appendChild(card);
-  });
-
-  captionGroups.forEach(({ count, card }) => {
-    card.querySelector('.media-card-dur').textContent = `${count} legendas · editar`;
-  });
+// #region Biblioteca (painel esquerdo)
+/** A biblioteca de assets vive em library.js; aqui fica o ponto de entrada antigo */
+function renderMediaPanel() {
+  window.MSLibrary?.render();
 }
-
-/**
- * Captura o primeiro frame de um vídeo (dataUrl) e pinta em um <canvas>.
- */
-function captureVideoFrame(dataUrl, canvas) {
-  const v    = document.createElement('video');
-  v.muted    = true;
-  v.preload  = 'metadata';
-  v.src      = dataUrl;
-
-  v.addEventListener('loadedmetadata', () => {
-    // Vai para 10% da duração — evita frame preto inicial
-    v.currentTime = (v.duration || 1) * 0.1;
-  }, { once: true });
-
-  v.addEventListener('seeked', () => {
-    const W = canvas.offsetWidth  || 120;
-    const H = canvas.offsetHeight || 68;
-    canvas.width  = W;
-    canvas.height = H;
-    canvas.getContext('2d').drawImage(v, 0, 0, W, H);
-    v.src = '';
-  }, { once: true });
-}
-
-$('mediaSearch')?.addEventListener('input', renderMediaPanel);
 // #endregion
 
 // #region Resize de Panels e Zoom Contextual
@@ -3830,8 +3721,8 @@ const PANEL_RESIZE_CONFIG = {
     cssVar: '--timeline-h',
     storageKey: 'timeline',
     min: 150,
-    max: 420,
-    defaultValue: 200,
+    max: 620,
+    defaultValue: 270,
   },
 };
 
@@ -4107,6 +3998,8 @@ fileInput.addEventListener('change', e => {
 document.addEventListener('dragover', e => e.preventDefault());
 document.addEventListener('drop', e => {
   e.preventDefault();
+  // Sem projeto aberto (tela inicial) não há onde importar
+  if (!state.project) return;
   if (e.dataTransfer.files.length) handleMediaFiles(e.dataTransfer.files);
 });
 
@@ -4118,6 +4011,11 @@ function renderSceneList() {
 // #region Modal: Exportar
 $('btnExport')?.addEventListener('click', () => {
   if (!state.project) return;
+  const exportDefaults = window.MSProjectSettings?.settings().export;
+  if (exportDefaults) {
+    if ($('exportFormat')) $('exportFormat').value = exportDefaults.format;
+    if ($('exportQuality')) $('exportQuality').value = exportDefaults.quality;
+  }
   const sum = $('exportScenesSummary');
   if (sum) {
     sum.innerHTML = `
@@ -4133,6 +4031,11 @@ $('btnExport')?.addEventListener('click', () => {
   }
   $('exportModal').style.display = 'flex';
 });
+['exportFormat', 'exportQuality'].forEach(id => $(id)?.addEventListener('change', () => {
+  const settings = window.MSProjectSettings?.settings();
+  if (!settings) return;
+  settings.export = { format: $('exportFormat').value, quality: $('exportQuality')?.value || 'high' };
+}));
 $('btnCloseExport')?.addEventListener('click',  () => $('exportModal').style.display = 'none');
 $('btnCancelExport')?.addEventListener('click', () => $('exportModal').style.display = 'none');
 $('btnStartExport')?.addEventListener('click', () => {
@@ -4153,26 +4056,19 @@ function isEditableTarget(target) {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }
 
-document.addEventListener('keydown', e => {
-  if (isEditableTarget(e.target)) return;
-  // Ctrl/⌘+Espaço é da barra de IA; atalhos com modificador ficam em timeline-pro.js
-  const mod = e.ctrlKey || e.metaKey || e.altKey;
-  if (mod && e.code !== 'Delete' && e.code !== 'Backspace') return;
-  if (e.code === 'Space')      { e.preventDefault(); window.togglePlay?.(); }
-  if (e.code === 'ArrowLeft')  window.seekTo?.(state.time - (e.shiftKey ? 1 / (state.project?.fps || 30) : 0.5));
-  if (e.code === 'ArrowRight') window.seekTo?.(state.time + (e.shiftKey ? 1 / (state.project?.fps || 30) : 0.5));
-  if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) window.splitCurrentScene?.();
-  if (e.code === 'Delete' || e.code === 'Backspace') {
-    const sel = window.__selectedClipIds ?? new Set();
-    const hasSel = [...sel].some(id => state.clips.some(c => c.id === id));
-    const hasCurrent = state.currentClipId && state.clips.some(c => c.id === state.currentClipId);
-    if (hasSel || hasCurrent) {
-      e.preventDefault();
-      if (e.shiftKey) window.rippleDeleteSelectedClips?.();
-      else window.deleteSelectedClips?.();
-    }
-  }
-});
+/**
+ * Campo onde Ctrl+Z desfaz o próprio texto. Sliders, selects, checkboxes e
+ * botões não: lá o Ctrl+Z é o do editor (antes, mexer num slider de efeito
+ * deixava o foco nele e o Ctrl+Z não fazia nada).
+ */
+function isTextEntryTarget(target) {
+  if (!target) return false;
+  if (target.isContentEditable || target.tagName === 'TEXTAREA') return true;
+  if (target.tagName !== 'INPUT') return false;
+  return ['text', 'number', 'search', 'email', 'url', 'password', 'tel', ''].includes(target.type);
+}
+
+// Os atalhos (espaço, setas, S, Del, Ctrl+N/S/O…) são do registro de comandos: commands.js
 // #endregion
 
 // #region Exports para motion.js e export.js

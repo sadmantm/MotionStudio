@@ -1,0 +1,66 @@
+/* ux.css — barra flutuante do clip (clip-bar.js) e ergonomia do painel de propriedades (props-ux.js) */
+
+/* #region Barra flutuante */
+.clip-bar {
+  position: fixed;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border3);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg3) 94%, transparent);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .55);
+  backdrop-filter: blur(4px);
+  animation: cb-in .12s ease-out;
+}
+.clip-bar[hidden] { display: none; }
+.cb-count { padding: 0 6px; font-size: 10.5px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.cb-count:empty { display: none; }
+.cb-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.cb-btn svg { pointer-events: none; }
+.cb-btn:hover { background: var(--bg4); color: var(--accent); }
+.cb-btn.is-danger:hover { background: rgba(255, 68, 85, .16); color: var(--danger); }
+@keyframes cb-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* #endregion */
+
+/* #region Painel de propriedades */
+.prop-title.ux-collapsible { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.prop-title.ux-collapsible:hover { color: var(--text); }
+.prop-title.ux-collapsible:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.ux-caret { display: inline-block; width: 10px; font-style: normal; font-size: 10px; color: var(--text-muted); transition: transform .12s; }
+.prop-section.is-collapsed > :not(.prop-title) { display: none !important; }
+.prop-section.is-collapsed > .prop-title .ux-caret { transform: rotate(-90deg); }
+.prop-title .fx-clear { margin-left: auto; }
+/* número que se arrasta */
+.fx-val[data-edit], .tf-axis, .prop-row > label:has(~ input[type="number"]) { cursor: ew-resize; }
+body.ux-scrubbing, body.ux-scrubbing * { cursor: ew-resize !important; user-select: none !important; }
+/* #endregion */
+
+@media (prefers-reduced-motion: reduce) { .clip-bar { animation: none; } }
+
+/* #region Esqueleto de mídia em preparo (miniaturas / forma de onda) */
+.tl-block-media.tl-media-loading::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .09) 45%, transparent 70%) 0 0 / 220% 100%;
+  animation: ux-shimmer 1.3s linear infinite;
+  pointer-events: none;
+}
+@keyframes ux-shimmer { from { background-position: 120% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .tl-block-media.tl-media-loading::before { animation: none; } }
+/* #endregion */

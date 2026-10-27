@@ -1,0 +1,84 @@
+/* camera.css — câmera 2D (camera.js) e câmera com IA (camera-ai.js) */
+
+/* #region Painel */
+.cam-hint { margin: 0 0 8px; font-size: 11px; line-height: 1.45; color: var(--text-muted); }
+.cam-hint b { color: var(--text); }
+.cam-hint-sm { margin: 8px 0 0; font-size: 10.5px; }
+.cam-tools .tf-btn[data-on] { border-color: #fbbf24; color: #fbbf24; background: rgba(251, 191, 36, .1); }
+.cam-ai-btn { border-color: var(--accent); color: var(--accent); }
+.cam-ai-btn:hover { background: var(--accent-dim); }
+.cam-clear { display: block; margin-top: 8px; }
+.cam-aim { min-width: 260px; }
+/* #endregion */
+
+/* #region Aviso no preview */
+.cam-hud {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 5px 12px;
+  border: 1px solid #22d3ee;
+  border-radius: 14px;
+  background: rgba(12, 12, 16, .88);
+  color: #e6faff;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.cam-hud[hidden] { display: none; }
+.cam-hud button { pointer-events: auto; margin-left: 6px; padding: 1px 8px; border: 1px solid #fbbf24; border-radius: 9px; background: none; color: #fbbf24; font: inherit; font-size: 10.5px; cursor: pointer; }
+/* #endregion */
+
+/* #region Modal Câmera com IA */
+#camModal[hidden] { display: none !important; }
+.cam-modal { width: 980px; max-width: calc(100vw - 32px); }
+.cam-body { flex-direction: row; gap: 20px; align-items: flex-start; }
+.cam-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.cam-right { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
+.cam-lead { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+.cam-label { display: block; margin-bottom: 4px; font-size: 11.5px; color: var(--text-muted); }
+.cam-label small { opacity: .7; }
+.cam-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cam-modal .prop-input.full { width: 100%; max-width: none; box-sizing: border-box; }
+.cam-steps { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.55; color: var(--text); }
+.cam-steps li { margin-bottom: 2px; }
+.cam-result-head { font-size: 12px; display: flex; align-items: center; justify-content: space-between; }
+.cam-result-head span { color: var(--text-muted); font-size: 11px; }
+.cam-map { width: 100%; height: 190px; border-radius: var(--radius-sm); background: var(--bg); border: 1px solid var(--border2); }
+.cam-frame { fill: rgba(255, 255, 255, .03); stroke: var(--border3); stroke-width: 3; }
+.cam-el { fill: rgba(167, 139, 250, .16); stroke: #a78bfa; stroke-width: 3; }
+.cam-eltxt { fill: #d9ccff; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+.cam-path { fill: none; stroke: #fbbf24; stroke-width: 4; stroke-dasharray: 14 9; opacity: .8; }
+.cam-view { fill: rgba(34, 211, 238, .1); stroke: #22d3ee; stroke-width: 6; }
+.cam-focus { fill: #22d3ee; }
+.cam-list { max-height: 210px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.cam-row-k {
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  grid-template-areas: "t f e" "t w w";
+  gap: 0 8px;
+  padding: 5px 7px;
+  border-radius: var(--radius-xs);
+  background: var(--bg3);
+  font-size: 11px;
+  cursor: default;
+}
+.cam-row-k.is-on { background: rgba(34, 211, 238, .1); box-shadow: inset 2px 0 0 #22d3ee; }
+.cam-t { grid-area: t; color: #22d3ee; font-variant-numeric: tabular-nums; font-weight: 700; }
+.cam-f { grid-area: f; color: var(--text); font-variant-numeric: tabular-nums; }
+.cam-e { grid-area: e; color: var(--text-muted); font-size: 10px; }
+.cam-why { grid-area: w; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cam-empty { margin: 8px 2px; font-size: 11.5px; line-height: 1.5; color: var(--text-muted); }
+.cam-summary { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--text-muted); }
+.cam-modal .export-btn:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 900px) { .cam-body { flex-direction: column; } .cam-right { width: 100%; } }
+/* #endregion */
+
+/* #region Caixa de transformação com a câmera ativa (só leitura) */
+#transformBox.cam-locked { pointer-events: none !important; border-style: dashed !important; border-color: #22d3ee !important; opacity: .7; }
+#transformBox.cam-locked .tx-handle, #transformBox.cam-locked .tx-rot-knob { display: none !important; }
+.tl-badge-cam { background: #22d3ee; }
+.tl-badge-adj { background: #a78bfa; }
+/* #endregion */

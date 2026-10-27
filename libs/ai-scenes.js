@@ -2,7 +2,8 @@
 // ai-scenes.js
 //
 //  Cenas com IA a partir de um áudio (ou vídeo com fala):
-//    1. transcreve o trecho usado do clip (tempo de cada fala)
+//    1. transcreve o trecho usado de cada clip selecionado (ex.: os trechos de
+//       uma narração cortada) e junta as falas no tempo da timeline
 //    2. /api/ai/scenes/plan divide em cenas nas pausas e fixa UM guia de estilo
 //       (paleta, fontes e :root idênticos em todas as cenas)
 //    3. gera as cenas EM ORDEM em /api/ai/generate com a duração exata do trecho:
@@ -10,6 +11,11 @@
 //       anterior e só edita o que muda (mesmo <head>/estilo, menos tokens,
 //       e começa do quadro onde a anterior terminou)
 //    4. coloca cada clipe na timeline alinhado ao trecho do áudio, assim que fica pronto
+//
+//  Progresso salvo no projeto (transcrição, plano/estilo e o HTML de cada cena):
+//  se a IA falhar (cota, sobrecarga) ou o modal/projeto for fechado, "Continuar"
+//  retoma do ponto onde parou, sem transcrever nem planejar de novo — as cenas
+//  já geradas ficam como estão e as novas seguem o mesmo estilo.
 
 (() => {
   const PREFS_KEY   = 'ms.aiScenesPrefs';
@@ -31,7 +37,7 @@
   ];
 
   const S = {
-    clipId:   null,
+    clipIds:  [],
     job:      null,   // execução atual (ver run())
     styleMode: 'auto',
   };
@@ -60,6 +66,18 @@
     const clip = st?.clips.find(c => c.id === clipId);
     const tmpl = clip && st.templates.find(t => t.id === clip.templateId);
     return clip && (tmpl?.type === 'audio' || tmpl?.type === 'video') ? { clip, tmpl } : null;
+  }
+
+  /** Clips de áudio/vídeo válidos, em ordem na timeline */
+  function sourcesOf(clipIds) {
+    return clipIds.map(sourceOf).filter(Boolean).sort((a, b) => a.clip.start - b.clip.start);
+  }
+
+  /** Trecho da timeline coberto pelos clips: { base, duration } */
+  function spanOf(sources) {
+    const base = Math.min(...sources.map(s => s.clip.start));
+    const end = Math.max(...sources.map(s => s.clip.start + s.clip.duration));
+    return { base, duration: end - base };
   }
 
   /** POST com resposta NDJSON → evento 'done' (status/progress vão para onEvent) */
@@ -102,6 +120,74 @@
     return done;
   }
 
+  // #region Progresso salvo (retomar)
+  const projectId = () => window.MSProjects?.currentId?.() || null;
+  const jobUrl = id => `/api/projects/${encodeURIComponent(id)}/ai-job`;
+  let saveTimer = null;
+
+  function snapshot(job) {
+    return {
+      v: 1,
+      savedAt: Date.now(),
+      clipIds: job.clipIds,
+      base: job.base,
+      duration: job.duration,
+      groupId: job.groupId,
+      trackIndex: job.trackIndex,
+      form: job.form,
+      project: job.project,
+      segments: job.segments || null,
+      style: job.style || null,
+      usage: job.usage,
+      scenes: job.scenes.map(sc => ({
+        ...sc,
+        status: sc.status === 'done' ? 'done' : 'pending',   // em andamento/falha → refazer na retomada
+        message: sc.status === 'done' ? sc.message : '',
+      })),
+    };
+  }
+
+  /** Salva (com debounce) o estado do trabalho no projeto; `now` grava já */
+  function persist(job, { now = false } = {}) {
+    if (!job?.projectId || (!job.segments && !job.scenes.length)) return;
+    clearTimeout(saveTimer);
+    const run = () => fetch(jobUrl(job.projectId), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job: snapshot(job) }),
+    }).catch(() => { /* sem servidor: segue sem salvar */ });
+    if (now) run(); else saveTimer = setTimeout(run, 400);
+  }
+
+  function discardSaved(id = projectId()) {
+    clearTimeout(saveTimer);
+    if (id) fetch(jobUrl(id), { method: 'DELETE' }).catch(() => {});
+  }
+
+  async function loadSaved(id = projectId()) {
+    if (!id) return null;
+    try {
+      const resp = await fetch(jobUrl(id), { cache: 'no-store' });
+      return resp.ok ? (await resp.json()).job : null;
+    } catch (_) { return null; }
+  }
+
+  /** Lista de modelos para escolher na recuperação ("" = automático, com rotação) */
+  async function fillModelSelect() {
+    const sel = $q('#scModel');
+    if (!sel) return;
+    try {
+      const data = await (await fetch('/api/ai/models')).json();
+      const cool = new Map((data.cooldowns || []).map(c => [c.model, c.secondsLeft]));
+      const wait = sec => (sec >= 5400 ? `${Math.round(sec / 3600)} h` : sec >= 90 ? `${Math.round(sec / 60)} min` : `${sec}s`);
+      const current = sel.value;
+      sel.innerHTML = `<option value="">Automático (troca de modelo sozinha)</option>${(data.models || []).map(m =>
+        `<option value="${esc(m.id)}">${esc(m.id)}${cool.has(m.id) ? ` · em espera ${wait(cool.get(m.id))}` : ''}</option>`).join('')}`;
+      sel.value = [...sel.options].some(o => o.value === current) ? current : '';
+    } catch (_) { /* sem lista: fica só o automático */ }
+  }
+  // #endregion
+
   /** Carrega as fontes do estilo na página para a prévia do guia */
   function loadFontsLink(href) {
     if (!href || document.querySelector(`link[data-ms-scene-fonts="${CSS.escape(href)}"]`)) return;
@@ -135,6 +221,13 @@
 
         <div class="modal-body sc-body">
           <section class="sc-config">
+            <div class="sc-resume" id="scResume" hidden>
+              <div class="sc-resume-text" id="scResumeText"></div>
+              <div class="sc-resume-actions">
+                <button class="export-btn" data-sc="resume">Continuar de onde parou</button>
+                <button class="btn-secondary" data-sc="discard">Descartar e começar de novo</button>
+              </div>
+            </div>
             <p class="sc-lead">A IA transcreve o áudio, divide em cenas nas pausas da fala e gera um clipe para cada trecho, já posicionado na timeline em cima do áudio. A 1ª cena define o visual; cada cena seguinte parte da anterior, para o estilo e as transições ficarem contínuos.</p>
 
             <div class="form-group">
@@ -196,6 +289,16 @@
               <li data-step="generate">Gerar cenas</li>
             </ol>
             <p class="sc-status" id="scStatus" aria-live="polite"></p>
+            <div class="sc-recover" id="scRecover" hidden>
+              <div class="sc-recover-text">Progresso salvo no projeto. Tente de novo agora (pode escolher o modelo) ou feche e volte depois em <b>Gerar cenas com IA → Continuar de onde parou</b>: nada é transcrito nem planejado outra vez e as cenas prontas continuam iguais.</div>
+              <label class="sc-recover-row">Modelo
+                <select id="scModel" class="prop-input"><option value="">Automático (troca de modelo sozinha)</option></select>
+              </label>
+              <div class="sc-recover-actions">
+                <button class="export-btn" data-sc="retry">Tentar de novo</button>
+                <button class="btn-secondary" data-sc="ai-settings">Chave e modelo padrão…</button>
+              </div>
+            </div>
             <div class="sc-style" id="scStyle" hidden></div>
             <ul class="sc-list" id="scList"></ul>
           </section>
@@ -204,7 +307,6 @@
         <div class="modal-footer">
           <span class="sc-footnote" id="scFootnote"></span>
           <button class="btn-secondary" data-sc="cancel">Cancelar</button>
-          <button class="btn-secondary" data-sc="retry" hidden>Tentar as que falharam</button>
           <button class="export-btn" data-sc="start">Gerar cenas</button>
           <button class="export-btn" data-sc="done" hidden>Concluir</button>
         </div>
@@ -229,8 +331,10 @@
       if (action === 'close' || action === 'done') close();
       if (action === 'cancel') S.job?.running ? cancel() : close();
       if (action === 'start') start();
-      if (action === 'retry') retryFailed();
-      if (action === 'retry-one') retryFailed(+btn.dataset.index);
+      if (action === 'retry') retry();
+      if (action === 'retry-one') retry(+btn.dataset.index);
+      if (action === 'resume') resume();
+      if (action === 'discard') { discardSaved(); $q('#scResume').hidden = true; }
       if (action === 'ai-settings') { close(); window.MotionAI?.open?.(); }
     });
 
@@ -258,34 +362,92 @@
     $q('[data-sc="done"]').hidden = view !== 'finished';
     $q('[data-sc="cancel"]').hidden = view === 'finished';
     $q('[data-sc="cancel"]').textContent = running ? 'Parar' : 'Cancelar';
-    $q('[data-sc="retry"]').hidden = !(view === 'finished' && S.job?.scenes.some(s => s.status === 'error'));
+    // Falha: painel de recuperação (tentar de novo / trocar o modelo)
+    const failed = view === 'finished' && Boolean(S.job?.failure || S.job?.scenes.some(s => s.status === 'error'));
+    $q('#scRecover').hidden = !failed || ['no_key', 'invalid_key'].includes(S.job?.failure?.code);
+    if (failed) fillModelSelect();
   }
 
-  function open(clipId) {
+  /** clipIds: o clip clicado ou a seleção inteira (todos viram um vídeo só) */
+  function open(clipIds) {
     build();
     // Uma geração por vez: reabre a que está rodando
     if (S.job?.running) {
       els.modal.style.display = 'flex';
       return;
     }
-    const src = sourceOf(clipId);
-    if (!src) return;
-    S.clipId = clipId;
+    const sources = sourcesOf([].concat(clipIds || []));
+    if (!sources.length) return;
+    const src = sources[0];
+    const hasVideo = sources.some(s => s.tmpl.type === 'video');
+    S.clipIds = sources.map(s => s.clip.id);
     S.job = null;
 
     const prefs = loadPrefs();
     $q('#scStyleText').value = prefs.styleText || '';
     $q('#scBrief').value = prefs.brief || '';
     $q('#scLength').value = prefs.sceneLength || 'auto';
-    $q('#scBackground').value = prefs.background || (src.tmpl.type === 'video' ? 'transparent' : 'full');
+    $q('#scBackground').value = prefs.background || (hasVideo ? 'transparent' : 'full');
     $q('#scLang').value = prefs.language ?? 'pt';
     $q('#scSfx').checked = Boolean(prefs.sfx);
     setStyleMode(prefs.styleMode || 'auto');
 
-    $q('#scSource').textContent = `${src.tmpl.type === 'audio' ? '♪' : '▶'} ${src.clip.label} · ${fmt(src.clip.duration)}`;
+    $q('#scSource').textContent = sources.length > 1
+      ? `${hasVideo ? '▶' : '♪'} ${sources.length} clips · ${src.clip.label} · ${fmt(spanOf(sources).duration)}`
+      : `${src.tmpl.type === 'audio' ? '♪' : '▶'} ${src.clip.label} · ${fmt(src.clip.duration)}`;
     $q('#scFootnote').textContent = '';
     showView('config');
     els.modal.style.display = 'flex';
+    showResumeOffer();
+  }
+
+  /** Há um trabalho salvo para estes clips? Oferece continuar */
+  async function showResumeOffer() {
+    const box = $q('#scResume');
+    box.hidden = true;
+    const saved = await loadSaved();
+    if (!saved || S.job || els.modal.style.display === 'none') return;
+    const st = appState();
+    const sameClips = (saved.clipIds || []).some(id => S.clipIds.includes(id)) && (saved.clipIds || []).every(id => st.clips.some(c => c.id === id));
+    const scenes = saved.scenes || [];
+    const done = scenes.filter(sc => sc.status === 'done').length;
+    if (!sameClips || (scenes.length && done === scenes.length)) return;
+    S.saved = saved;
+    $q('#scResumeText').innerHTML = scenes.length
+      ? `<b>Geração anterior salva</b> · ${done} de ${scenes.length} cenas prontas${saved.style?.name ? ` · estilo “${esc(saved.style.name)}”` : ''}. Continue de onde parou: a transcrição, o plano e as cenas prontas são aproveitados.`
+      : `<b>Geração anterior salva</b> · transcrição pronta (${(saved.segments || []).length} falas). Continue para planejar e gerar as cenas sem transcrever de novo.`;
+    box.hidden = false;
+  }
+
+  /** Retoma o trabalho salvo: pula as etapas prontas e gera só o que falta */
+  function resume() {
+    const saved = S.saved;
+    if (!saved || S.job?.running) return;
+    const st = appState();
+    const job = {
+      running: false,
+      controller: null,
+      projectId: projectId(),
+      form: saved.form,
+      clipIds: saved.clipIds,
+      base: saved.base,
+      duration: saved.duration,
+      groupId: saved.groupId,
+      trackIndex: saved.trackIndex,
+      segments: saved.segments,
+      style: saved.style,
+      scenes: (saved.scenes || []).map(sc => ({ ...sc, status: sc.status === 'done' ? 'done' : 'pending', message: sc.status === 'done' ? (sc.message || 'pronta') : '' })),
+      undoPushed: false,
+      usage: saved.usage || { input: 0, output: 0 },
+      project: { w: st.project.res.w, h: st.project.res.h, fps: st.project.fps },
+      model: '',
+    };
+    // Mesma track das cenas que já estão na timeline
+    const placed = st.clips.find(c => c.aiSceneGroupId === job.groupId);
+    job.trackIndex = placed ? placed.trackIndex : pickTrack(job);
+    S.job = job;
+    S.saved = null;
+    runPipeline(job);
   }
 
   function close() {
@@ -303,6 +465,7 @@
     const el = $q('#scStatus');
     el.textContent = text;
     el.classList.toggle('is-error', kind === 'error');
+    S.job?.task?.update({ detail: text });
   }
 
   function readForm() {
@@ -317,9 +480,10 @@
     };
   }
 
-  async function start() {
-    const src = sourceOf(S.clipId);
-    if (!src) { close(); return; }
+  function start() {
+    const sources = sourcesOf(S.clipIds);
+    if (!sources.length) { close(); return; }
+    const span = spanOf(sources);
     const form = readForm();
     if (form.styleMode === 'custom' && !form.styleText) {
       $q('#scStyleText').focus();
@@ -328,76 +492,129 @@
       return;
     }
     savePrefs(form);
+    discardSaved();   // começar de novo substitui o trabalho salvo
+    S.saved = null;
 
     const st = appState();
     const job = {
       running: true,
       controller: new AbortController(),
+      projectId: projectId(),
       form,
-      clipId: src.clip.id,
-      base: src.clip.start,
-      duration: src.clip.duration,
+      clipIds: sources.map(s => s.clip.id),
+      base: span.base,
+      duration: span.duration,
       groupId: 'aiscene_' + (window.mkId ? window.mkId() : Date.now().toString(36)),
       trackIndex: null,
+      segments: null,
       style: null,
       scenes: [],
       undoPushed: false,
       usage: { input: 0, output: 0 },
       project: { w: st.project.res.w, h: st.project.res.h, fps: st.project.fps },
+      model: '',
     };
     S.job = job;
+    runPipeline(job);
+  }
+
+  function startTask(job) {
+    job.task?.close();
+    job.task = window.MSUI.task({
+      title: 'Cenas com IA',
+      detail: 'Preparando…',
+      progress: job.scenes.length ? job.scenes.filter(s => s.status === 'done').length / job.scenes.length : null,
+      onCancel: () => cancel(),
+      onOpen: () => { els.modal.style.display = 'flex'; },
+    });
+  }
+
+  /** transcrever → planejar → gerar; etapas já prontas no job (retomada/nova tentativa) são puladas */
+  async function runPipeline(job) {
+    job.running = true;
+    job.failure = null;
+    job.controller = new AbortController();
+    const form = job.form;
+
+    // Cartão de progresso fixo: o modal pode ser fechado e a geração segue (clicar no cartão reabre)
+    startTask(job);
 
     showView('run');
-    ['transcribe', 'plan', 'generate'].forEach(s => setStep(s, ''));
+    setStep('transcribe', job.segments ? 'done' : '');
+    setStep('plan', job.scenes.length ? 'done' : '');
+    setStep('generate', '');
     $q('#scStyle').hidden = true;
     $q('#scList').innerHTML = '';
+    if (job.style) renderStyle(job.style);
+    if (job.scenes.length) renderScenes();
 
     try {
       // 1. Transcrição (reaproveita se o mesmo trecho já foi transcrito)
-      setStep('transcribe', 'active');
-      setStatus('Preparando a transcrição…');
-      const transcript = await window.__transcribeClip(src.clip.id, {
-        language: form.language,
-        onProgress: ({ stage, status }) => {
-          if (stage === 'model') setStatus(status?.message || 'Carregando o modelo de transcrição…');
-          if (stage === 'transcribe') setStatus(status?.device === 'cuda' ? 'Transcrevendo (GPU)…' : 'Transcrevendo em CPU — pode levar alguns minutos…');
-        },
-      });
-      if (!job.running) return;
-      const segments = (transcript.segments || []).map(s => ({
-        start: +s.start, end: +s.start + +s.duration, text: s.text,
-      }));
+      if (!job.segments) {
+        const sources = sourcesOf(job.clipIds);
+        if (!sources.length) throw new Error('Os clips de áudio desta geração não estão mais na timeline.');
+        setStep('transcribe', 'active');
+        setStatus('Preparando a transcrição…');
+        // Cada clip é transcrito no seu trecho; as falas vão para o tempo da
+        // timeline (relativo ao início do 1º clip) e formam um roteiro só
+        const segments = [];
+        for (const [i, src] of sources.entries()) {
+          const part = sources.length > 1 ? ` ${i + 1} de ${sources.length}` : '';
+          const transcript = await window.__transcribeClip(src.clip.id, {
+            language: form.language,
+            onProgress: ({ stage, status }) => {
+              if (stage === 'model') setStatus(status?.message || 'Carregando o modelo de transcrição…');
+              if (stage === 'transcribe') setStatus(status?.device === 'cuda' ? `Transcrevendo${part} (GPU)…` : `Transcrevendo${part} em CPU — pode levar alguns minutos…`);
+            },
+          });
+          if (!job.running) return;
+          const offset = src.clip.start - job.base;
+          (transcript.segments || []).forEach(sg => {
+            const a = Math.max(0, +sg.start);
+            const b = Math.min(src.clip.duration, +sg.start + +sg.duration);
+            if (b > a) segments.push({ start: +(offset + a).toFixed(3), end: +(offset + b).toFixed(3), text: sg.text });
+          });
+        }
+        segments.sort((a, b) => a.start - b.start);
+        job.segments = segments;
+        persist(job, { now: true });
+      }
       setStep('transcribe', 'done');
 
       // 2. Plano: cenas + guia de estilo único
-      setStep('plan', 'active');
-      setStatus(segments.length ? `${segments.length} falas transcritas · planejando as cenas…` : 'Sem fala detectada · planejando pela duração…');
-      const plan = await streamNdjson('/api/ai/scenes/plan', {
-        transcript: { duration: job.duration, segments },
-        style: { mode: form.styleMode, text: form.styleText },
-        brief: form.brief,
-        sceneLength: form.sceneLength,
-        background: form.background,
-        project: job.project,
-      }, { signal: job.controller.signal, onEvent: ev => { if (ev.type === 'status') setStatus(ev.message); } });
-      if (!job.running) return;
-      addUsage(job, plan.usage);
-      job.style = plan.style;
-      job.scenes = plan.scenes.map((s, index) => ({ ...s, index, status: 'pending', message: '' }));
-      job.trackIndex = pickTrack(job);
+      if (!job.scenes.length) {
+        setStep('plan', 'active');
+        setStatus(job.segments.length ? `${job.segments.length} falas transcritas · planejando as cenas…` : 'Sem fala detectada · planejando pela duração…');
+        const plan = await streamNdjson('/api/ai/scenes/plan', {
+          transcript: { duration: job.duration, segments: job.segments },
+          style: { mode: form.styleMode, text: form.styleText },
+          brief: form.brief,
+          sceneLength: form.sceneLength,
+          background: form.background,
+          project: job.project,
+          model: job.model || undefined,
+        }, { signal: job.controller.signal, onEvent: ev => { if (ev.type === 'status') setStatus(ev.message); } });
+        if (!job.running) return;
+        addUsage(job, plan.usage);
+        job.style = plan.style;
+        job.scenes = plan.scenes.map((sc, index) => ({ ...sc, index, status: 'pending', message: '' }));
+        job.trackIndex = pickTrack(job);
+        persist(job, { now: true });
+        renderStyle(job.style);
+        renderScenes();
+      }
       setStep('plan', 'done');
-      renderStyle(job.style);
-      renderScenes();
 
       // 3. Cenas em ordem, cada uma a partir da anterior; entram na timeline ao terminar
       await generatePending(job);
     } catch (err) {
       if (err.name === 'AbortError' || err.code === 'aborted') {
-        setStatus('Geração interrompida. As cenas prontas continuam na timeline.');
+        setStatus('Geração interrompida. O progresso está salvo — dá para continuar depois.');
       } else {
-        const step = job.scenes.length ? 'generate' : (job.style ? 'plan' : ($q('[data-step="transcribe"]').dataset.state === 'done' ? 'plan' : 'transcribe'));
-        setStep(step, 'error');
-        setStatus(err.message || 'Falha ao gerar as cenas.', 'error');
+        const stage = job.scenes.length ? 'generate' : (job.segments ? 'plan' : 'transcribe');
+        setStep(stage, 'error');
+        job.failure = { stage, code: err.code, message: err.message };
+        setStatus(`${err.message || 'Falha ao gerar as cenas.'}${job.segments ? ' O progresso foi salvo.' : ''}`, 'error');
         if (err.code === 'no_key' || err.code === 'invalid_key') {
           $q('#scStatus').insertAdjacentHTML('beforeend', ' <button class="sc-link" data-sc="ai-settings">Configurar a chave do Gemini</button>');
         }
@@ -415,6 +632,7 @@
       if (!job.running) return;
       if (scene.status !== 'pending') continue;   // pronta, ou falhou por falta de cota
       await generateScene(job, scene);
+      persist(job);
       updateProgress(job);
     }
     if (!job.running) return;
@@ -444,6 +662,7 @@
         name: scene.title,
         project: job.project,
         sfx: Boolean(job.form.sfx),
+        model: job.model || undefined,
         scene: {
           index: scene.index,
           total: job.scenes.length,
@@ -466,7 +685,7 @@
             scene.message = `Gerando${label ? ` (${label})` : ''}… ${ev.chars.toLocaleString('pt-BR')} caracteres`;
             renderScene(scene);
           }
-          if (ev.type === 'status' && (ev.rotatedFrom || ev.waiting || ev.issues)) {
+          if (ev.type === 'status' && (ev.rotatedFrom || ev.retrying || ev.waiting || ev.issues)) {
             scene.message = ev.message;
             renderScene(scene);
           }
@@ -485,23 +704,37 @@
       } else {
         scene.status = 'error';
         scene.message = err.message || 'falhou';
-        // Sem cota em nenhum modelo: as próximas falhariam igual
+        // Sem cota/resposta em nenhum modelo: as próximas falhariam igual
         if (err.code === 'all_models_exhausted' || err.code === 'no_key' || err.code === 'invalid_key') {
-          job.scenes.forEach(s => { if (s.status === 'pending') { s.status = 'error'; s.message = 'não gerada (sem cota)'; renderScene(s); } });
+          job.failure = { stage: 'generate', code: err.code, message: err.message };
+          job.scenes.forEach(s => { if (s.status === 'pending') { s.status = 'error'; s.message = 'não gerada (modelo indisponível)'; renderScene(s); } });
         }
       }
     }
     renderScene(scene);
   }
 
+  /** Nova tentativa: do estágio que falhou (transcrição/plano) ou só das cenas que falharam */
+  async function retry(index = null) {
+    const job = S.job;
+    if (!job || job.running) return;
+    // Modelo escolhido na tela de recuperação ('' = automático)
+    const sel = $q('#scModel');
+    if (sel && !$q('#scRecover').hidden) job.model = sel.value;
+    if (!job.scenes.length) return runPipeline(job);
+    return retryFailed(index);
+  }
+
   async function retryFailed(index = null) {
     const job = S.job;
     if (!job || job.running) return;
-    job.scenes.forEach(s => {
-      if (s.status === 'error' && (index == null || s.index === index)) { s.status = 'pending'; s.message = ''; renderScene(s); }
+    job.scenes.forEach(sc => {
+      if (sc.status === 'error' && (index == null || sc.index === index)) { sc.status = 'pending'; sc.message = ''; renderScene(sc); }
     });
     job.running = true;
+    job.failure = null;
     job.controller = new AbortController();
+    startTask(job);
     showView('run');
     try {
       await generatePending(job);
@@ -521,16 +754,24 @@
     job.running = false;
     const done = job.scenes.filter(s => s.status === 'done').length;
     const failed = job.scenes.filter(s => s.status === 'error').length;
+    // Tudo pronto: não há o que retomar. Senão, guarda o progresso para continuar depois
+    if (job.scenes.length && done === job.scenes.length) discardSaved(job.projectId);
+    else persist(job, { now: true });
     if (job.scenes.length) {
       const tokens = job.usage.input + job.usage.output;
       $q('#scFootnote').textContent = tokens ? `${tokens.toLocaleString('pt-BR')} tokens` : '';
       if (!$q('#scStatus').classList.contains('is-error') || done) {
         setStatus(failed
-          ? `${done} de ${job.scenes.length} cenas prontas · ${failed} falharam (tente de novo)`
+          ? `${done} de ${job.scenes.length} cenas prontas · ${failed} não foram geradas. O progresso está salvo.`
           : `${done} cenas prontas na timeline, alinhadas ao áudio.`, failed ? 'error' : '');
       }
     }
     showView('finished');
+    // Cartão: concluído, ou falha (o quadro de recuperação continua disponível no modal)
+    if (job.scenes.length && done === job.scenes.length) job.task?.done(`${done} cenas na timeline`);
+    else if (job.failure) job.task?.fail(job.failure.message || 'Falhou — o progresso está salvo');
+    else if (failed) job.task?.fail(`${failed} cena(s) não geradas — o progresso está salvo`);
+    else job.task?.close();
   }
 
   function addUsage(job, usage) {
@@ -542,6 +783,7 @@
     const total = job.scenes.length;
     const done = job.scenes.filter(s => s.status === 'done').length;
     if (job.running) setStatus(`Gerando cenas · ${done} de ${total} prontas`);
+    job.task?.update({ progress: total ? done / total : null });
   }
   // #endregion
 
@@ -715,5 +957,5 @@
   // #endregion
 
   window.__onClipAIScenes = open;
-  window.MotionAIScenes = { open, close, cancel };
+  window.MotionAIScenes = { open, close, cancel, resume };
 })();

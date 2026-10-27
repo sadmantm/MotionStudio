@@ -10,6 +10,14 @@ const EXPORT_SERVER = location.protocol.startsWith('http') ? location.origin : '
 function setProgress(pct, msg) {
   document.getElementById('progressFill').style.width = pct + '%';
   document.getElementById('progressText').textContent = msg;
+  // Cartão de progresso fixo: continua visível com o modal fechado (clicar reabre)
+  const task = window.__exportTask;
+  if (task?.running) {
+    const text = String(msg).replace(/^[✅❌]\s*/, '');
+    if (/^❌/.test(msg)) task.fail(text);
+    else if (/^✅/.test(msg)) task.done(text);
+    else task.update({ progress: Math.max(0, Math.min(1, pct / 100)), detail: text });
+  }
 }
 
 function setExportBusy(busy) {
@@ -146,6 +154,11 @@ async function buildClipForExport(
     return null;
   }
 
+  // A câmera 2D não tem imagem: ela só move as camadas abaixo (cams, mais abaixo)
+  if (window.ClipKF?.isCamera(clip)) {
+    return null;
+  }
+
   const track =
     tracks.find(
       item =>
@@ -227,13 +240,41 @@ async function buildClipForExport(
       clip.trackIndex ?? 0,
 
     volume:
-      audioMuted ? 0 : Math.max(0, Math.min(1, Number(clip.volume ?? 1))),
+      audioMuted ? 0 : (window.ClipKF?.has(clip, 'volume') ? 1 : Math.max(0, Math.min(1, Number(clip.volume ?? 1)))) *
+        Math.max(0, Math.min(1, Number(track?.volume ?? 1))),
+
+    // Keyframes de volume: curva em segundos do clip, já multiplicada pelo volume da track
+    // (mudo/solo: sem curva; volume acima fica 0)
+    volumeKeys:
+      audioMuted ? null : window.ClipKF?.exportKeys(clip, Math.max(0, Math.min(1, Number(track?.volume ?? 1)))) || null,
 
     fadeIn:
       Math.max(0, Number(clip.fadeIn) || 0),
 
     fadeOut:
       Math.max(0, Number(clip.fadeOut) || 0),
+
+    // Mesclagem, camada de ajuste e câmeras 2D acima desta camada (ver ClipKF.fxExtras)
+    blend:
+      window.ClipKF?.fxExtras(clip, [])?.blend || null,
+
+    adj:
+      Boolean(window.ClipKF?.fxExtras(clip, [])?.adj),
+
+    ...(window.ClipKF
+      ? (({ cams, center, frame }) => (cams ? { cams, center, frame } : {}))(window.ClipKF.fxExtras(clip, window.ClipKF.cameras()))
+      : {}),
+
+    // Animação por keyframes (escala, posição, rotação, cor): chaves em segundos do clip + a caixa fixa de referência
+    kf:
+      window.ClipKF?.hasAnim(clip) ? window.ClipKF.relKeys(clip) : null,
+
+    kfBase:
+      window.ClipKF?.hasAnim(clip) ? window.ClipKF.baseOf(clip) : null,
+
+    // Efeitos e transições (clip-fx.js); tailFx é preenchido em runExport
+    fx:
+      clip.fx || null,
 
     tx:
       clip._tx || null,
@@ -257,6 +298,20 @@ async function buildClipForExport(
     mimeType:
       tmpl.mimeType || null,
   };
+
+  // Camadas especiais (sólido, gradiente, forma, ajuste…): vão como HTML com a imagem SVG embutida,
+  // o mesmo caminho dos clips HTML (o arquivo .svg enviado não teria extensão no servidor)
+  if (tmpl.layer && window.MSLayers?.exportHtml) {
+    entry.type = 'html';
+    entry.html = window.MSLayers.exportHtml(tmpl, entry.duration);
+    entry.trimStart = 0;
+    entry.trimEnd = entry.duration;
+    entry.sourceDuration = entry.duration;
+    entry.fitAnimationToClip = false;
+    entry.dataUrl = null;
+    entry.uploadId = null;
+    return entry;
+  }
 
   if (entry.type === 'html') {
     if (isText) {
@@ -320,6 +375,13 @@ window.runExport = async function runExport() {
 
   document.getElementById('exportProgress').style.display = 'block';
   setExportBusy(true);
+  window.__exportTask?.close();
+  window.__exportTask = window.MSUI?.task({
+    title: 'Exportando vídeo',
+    detail: 'Preparando…',
+    progress: 0,
+    onOpen: () => { document.getElementById('exportModal').style.display = 'flex'; },
+  });
 
   // ── 1. Health check ────────────────────────────────────────
   try {
@@ -370,6 +432,12 @@ window.runExport = async function runExport() {
     }
   }
 
+  // Transição entre clips: o anterior fica visível por baixo (mesma regra do preview)
+  const tails = window.__buildTailMap?.(stateClips) || new Map();
+  clipsForExport.forEach(entry => {
+    entry.tailFx = tails.get(entry.id) || null;
+  });
+
   const errors = validateProjectForExport(clipsForExport);
   if (errors.length) {
     setProgress(0, '❌ ' + errors.join(' | '));
@@ -390,6 +458,8 @@ window.runExport = async function runExport() {
         fps, format: fmt, width: W, height: H,
         projectRes: state?.project?.res || { w: W, h: H },   // ← NOVO
         workersPerScene: workers,
+        quality: document.getElementById('exportQuality')?.value || 'high',
+        background: state?.project?.background || '#000000',
       }),
     });
     if (!r.ok) throw new Error(await r.text());

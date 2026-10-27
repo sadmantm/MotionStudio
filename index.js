@@ -317,6 +317,12 @@ registerExportMediaRoutes(app);
 app.use(express.json({ limit: '900mb' }));
 require('./libs/ai-server').register(app, { root: __dirname });
 require('./libs/sfx-library').register(app);
+require('./libs/sfx-openverse').register(app);
+require('./libs/curve-spec').register(app);
+require('./libs/camera-spec').register(app);
+require('./libs/projects').register(app, { root: __dirname });
+// Efeitos, transições e textos criados pelo usuário (colar HTML ou IA)
+require('./libs/custom-assets').register(app, { root: __dirname, ...require('./libs/ai-server')._internal });
 
 // #region Preview isolado
 // O editor carrega cada clipe HTML de outro "site" (127.0.0.1 ↔ localhost):
@@ -364,7 +370,18 @@ app.get('/desktop.js', (req, res) => {
     es.onerror = function () { es.close(); setTimeout(connect, 1000); };
   }
   connect();
+  // WebGL neste navegador: o launcher troca o Chrome pelo Firefox se faltar
+  var ok = false;
+  try { var c = document.createElement('canvas'); ok = Boolean(c.getContext('webgl2') || c.getContext('webgl')); } catch (e) {}
+  fetch('/api/desktop/webgl', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ok: ok, ua: navigator.userAgent }) }).catch(function () {});
 })();`);
+});
+
+app.post('/api/desktop/webgl', (req, res) => {
+  if (!desktopMode) return res.status(404).end();
+  process.emit('motion-studio:webgl', { ok: Boolean(req.body?.ok), ua: String(req.body?.ua || '').slice(0, 200) });
+  res.json({ ok: true });
 });
 
 app.get('/api/desktop/presence', (req, res) => {
@@ -395,7 +412,8 @@ app.post('/api/thumbs/html', async (req, res) => {
 
   const w      = Math.min(7680, Math.max(16, Math.round(Number(body.w) || 1080)));
   const h      = Math.min(7680, Math.max(16, Math.round(Number(body.h) || 1920)));
-  const height = Math.min(240, Math.max(24, Math.round(Number(body.height) || 90)));
+  // 90 px para a filmstrip; até 720 px quando a câmera com IA pede quadros legíveis
+  const height = Math.min(720, Math.max(24, Math.round(Number(body.height) || 90)));
 
   // Mesma rota do preview isolado: <base href="/"> resolve os assets do projeto
   const id = crypto.createHash('sha1').update(html).digest('hex');
@@ -431,14 +449,17 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.static(path.join(__dirname, 'Interface')));
+// no-cache = revalida (ETag) a cada carga: o Chrome do app guarda o perfil e, sem isso,
+// reaproveitaria por horas o JS/CSS antigo depois de uma atualização
+const revalidate = { setHeaders: res => res.setHeader('Cache-Control', 'no-cache') };
+app.use(express.static(path.join(__dirname, 'Interface'), revalidate));
 
 // Rota principal
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'Interface', 'index.html'));
 });
 
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(path.join(__dirname), revalidate));
 // #endregion
 
 // #region Rotas — Health
@@ -470,7 +491,7 @@ app.post('/api/motion/validate', (req, res) => {
  * Body: { scenes, fps, format, width, height, workersPerScene }
  */
 app.post('/api/export/start', async (req, res) => {
-  const { clips, fps, format, width, height, projectRes, workersPerScene } = req.body || {};
+  const { clips, fps, format, width, height, projectRes, workersPerScene, quality, background } = req.body || {};
 
   if (!Array.isArray(clips) || clips.length === 0)
     return res.status(400).json({ error: 'clips[] é obrigatório e não pode estar vazio' });
@@ -492,6 +513,8 @@ app.post('/api/export/start', async (req, res) => {
       width: safeW, height: safeH,
       projectRes: safeRes,
       workersPerScene,
+      quality: ['normal', 'high', 'max'].includes(quality) ? quality : 'high',
+      background: /^#[0-9a-f]{6}$/i.test(background || '') ? background : '#000000',
     }).catch(err => console.error(`[Job ${jobId}] Falha fatal:`, err.message))
   );
 });
@@ -688,8 +711,8 @@ app.get('/api/whisper/health', (_req, res) => {
 app.post('/api/audio/extract', async (req, res) => {
   const ext = String(req.query.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp4';
   const tag = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const input  = path.join(os.tmpdir(), `ms_ax_${tag}.${ext}`);
-  const output = path.join(os.tmpdir(), `ms_ax_${tag}.m4a`);
+  const input  = path.join(os.tmpdir(), `ms_ax_${tag}_in.${ext}`);
+  const output = path.join(os.tmpdir(), `ms_ax_${tag}_out.m4a`);
   const cleanup = () => { fs.rm(input, { force: true }, () => {}); fs.rm(output, { force: true }, () => {}); };
 
   const ffmpeg = args => new Promise(resolve => {
@@ -719,6 +742,9 @@ app.post('/api/audio/extract', async (req, res) => {
   }
 });
 
+// Velocidade, tom e redutor de ruído dos clips de áudio (libs/audio-fx.js)
+require('./libs/audio-fx').register(app, { ffmpegPath: getFfmpegPath, saveUpload });
+
 app.post('/api/transcribe', async (req, res) => {
   if (whisper.state !== 'ready') {
     if (whisper.state === 'idle') startWhisper();
@@ -730,8 +756,9 @@ app.post('/api/transcribe', async (req, res) => {
   const start    = Math.max(0, Number(q.start) || 0);
   const duration = Math.max(0, Number(q.duration) || 0);
   const tag      = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const mediaPath = path.join(os.tmpdir(), `ms_tx_${tag}.${ext}`);
-  const wavPath   = path.join(os.tmpdir(), `ms_tx_${tag}.wav`);
+  // Sufixos distintos: com upload .wav (gravação de voz) entrada e saída tinham o mesmo nome
+  const mediaPath = path.join(os.tmpdir(), `ms_tx_${tag}_in.${ext}`);
+  const wavPath   = path.join(os.tmpdir(), `ms_tx_${tag}_16k.wav`);
 
   try {
     await saveUpload(req, mediaPath);

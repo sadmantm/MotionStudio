@@ -16,6 +16,14 @@ models/
 .bin/
 dist/
 tmp/
+
+# Projetos do usuário (app desktop: pasta de dados do usuário)
+projects/
+custom-assets/
 desktop/.cache/
 LauncherTemp/bin/
 LauncherTemp/obj/
+
+# Executável casca (npm run desktop:stub)
+Motion Studio.exe
+Motion Studio.app/

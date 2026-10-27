@@ -155,6 +155,17 @@ window.__TextRegistry = (() => {
     });
   }
 
+  // Template com HTML já em mãos (ex.: criado pelo usuário em custom-assets.js)
+  function addSource(meta, htmlSource) {
+    if (!meta?.id || !htmlSource) return;
+    _upsertTemplate(_normalizeTemplate(meta, htmlSource));
+  }
+
+  function remove(id) {
+    const i = _findIndexById(id);
+    if (i >= 0) _templates.splice(i, 1);
+  }
+
   function getAll() {
     return [..._templates];
   }
@@ -172,6 +183,8 @@ window.__TextRegistry = (() => {
   return {
     loadAll,
     register,
+    addSource,
+    remove,
     buildHtml,
     getAll,
     getById,

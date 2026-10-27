@@ -212,28 +212,29 @@ async function stageApp(t, appDir) {
 // #endregion
 
 // #region Launcher (Node SEA)
-let blobPath = null;
+const blobs = new Map();
 
-/** O blob independe da plataforma (sem code cache/snapshot): gera uma vez */
-function seaBlob() {
-  if (blobPath) return blobPath;
+/** O blob independe da plataforma (sem code cache/snapshot): gera uma vez por main */
+function seaBlob(main = path.join(__dirname, 'launcher.js')) {
+  if (blobs.has(main)) return blobs.get(main);
   fs.mkdirSync(CACHE, { recursive: true });
-  blobPath = path.join(CACHE, 'sea-prep.blob');
-  const config = path.join(CACHE, 'sea-config.json');
+  const blobPath = path.join(CACHE, `sea-${path.basename(main, '.js')}.blob`);
+  const config = path.join(CACHE, `sea-${path.basename(main, '.js')}.json`);
   fs.writeFileSync(config, JSON.stringify({
-    main: path.join(__dirname, 'launcher.js'),
+    main,
     output: blobPath,
     disableExperimentalSEAWarning: true,
     useSnapshot: false,
     useCodeCache: false,
   }));
   run(process.execPath, ['--experimental-sea-config', config]);
+  blobs.set(main, blobPath);
   return blobPath;
 }
 
-function postject(exe, extra = []) {
+function postject(exe, extra = [], main = undefined) {
   const bin = path.join(ROOT, 'node_modules', 'postject', 'dist', 'cli.js');
-  run(process.execPath, [bin, exe, 'NODE_SEA_BLOB', seaBlob(), '--sentinel-fuse', SEA_FUSE, ...extra]);
+  run(process.execPath, [bin, exe, 'NODE_SEA_BLOB', seaBlob(main), '--sentinel-fuse', SEA_FUSE, ...extra]);
 }
 
 /** Confere que o diretório de realocações continua íntegro (o loader do Windows o percorre) */
@@ -281,15 +282,27 @@ function setWindowsGuiSubsystem(exe) {
   }
 }
 
-/** .ico com PNGs (256/48/32/16) gerados do Icon.png — exige sips (macOS) */
+/** PNG quadrado redimensionado do Icon.png: sips no macOS, ffmpeg nos outros */
+function resizeIcon(size, out) {
+  const src = path.join(ROOT, 'Icon.png');
+  if (IS_MAC_HOST) {
+    run('sips', ['-z', String(size), String(size), src, '--out', out], { stdio: 'ignore' });
+  } else {
+    const ffmpeg = require(path.join(ROOT, 'node_modules', 'ffmpeg-static'));
+    run(ffmpeg, ['-v', 'error', '-y', '-i', src, '-vf', `scale=${size}:${size}:flags=lanczos`, '-pix_fmt', 'rgba', out], { stdio: 'ignore' });
+  }
+}
+
+/** .ico com PNGs (256/48/32/16) gerados do Icon.png (refeito se o Icon.png mudar) */
 function buildIco() {
   const out = path.join(CACHE, 'icon.ico');
-  if (fs.existsSync(out)) return out;
-  if (!IS_MAC_HOST) return null;
+  const srcTime = fs.statSync(path.join(ROOT, 'Icon.png')).mtimeMs;
+  if (fs.existsSync(out) && fs.statSync(out).mtimeMs >= srcTime) return out;
+  fs.mkdirSync(CACHE, { recursive: true });
   const sizes = [256, 48, 32, 16];
   const pngs = sizes.map(size => {
     const f = path.join(CACHE, `icon-${size}.png`);
-    run('sips', ['-z', String(size), String(size), path.join(ROOT, 'Icon.png'), '--out', f], { stdio: 'ignore' });
+    resizeIcon(size, f);
     return fs.readFileSync(f);
   });
   const header = Buffer.alloc(6 + 16 * sizes.length);
@@ -330,8 +343,6 @@ async function brandWindowsExe(exe) {
       res.entries, group ? group.id : 1, group ? group.lang : 1033,
       iconFile.icons.map(i => i.data)
     );
-  } else {
-    log('aviso: sem sips para gerar o ícone do .exe (build fora do macOS)');
   }
 
   const [vi] = ResEdit.Resource.VersionInfo.fromEntries(res.entries);
@@ -501,9 +512,14 @@ async function buildTarget(name) {
 }
 // #endregion
 
+let opts = { noPython: false, noZip: true, targets: [] };
+
+module.exports = { ROOT, CACHE, APP_NAME, NODE_VER, IS_MAC_HOST, log, run, rm, postject, brandWindowsExe, setWindowsGuiSubsystem, assertPeRelocations, macIcon, infoPlist };
+
 // #region CLI
+if (require.main === module) {
 const argv = process.argv.slice(2);
-const opts = {
+opts = {
   noPython: argv.includes('--no-python'),
   noZip: argv.includes('--no-zip'),
   targets: (() => {
@@ -522,4 +538,5 @@ const opts = {
   console.error('[build] ERRO:', err.message);
   process.exit(1);
 });
+}
 // #endregion

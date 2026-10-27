@@ -5,10 +5,12 @@
 //  Node SEA (ver desktop/build.js) ou roda direto: `node desktop/launcher.js`.
 //
 //  1. Prepara a pasta de dados do usuário (modelos, ambiente Python, chave da IA,
-//     perfil do Firefox, logs) — a pasta do app pode ser somente leitura.
+//     perfis do navegador, logs) — a pasta do app pode ser somente leitura.
 //  2. Sobe o servidor (index.js) dentro deste mesmo processo.
-//  3. Abre o editor no Firefox com um perfil próprio, sem barras (cara de app).
-//  4. Quando a última janela do editor fecha, encerra Firefox, Whisper e servidor.
+//  3. Abre o editor no Chrome (ou Edge) em modo app, com perfil próprio. A página
+//     testa o WebGL: em algumas máquinas ele não funciona no Chrome mas funciona
+//     no Firefox — aí o launcher troca para o Firefox e lembra a escolha.
+//  4. Quando a última janela do editor fecha, encerra navegador, Whisper e servidor.
 //
 //  Só usa módulos nativos do Node: o SEA embute um único arquivo.
 
@@ -25,6 +27,7 @@ const IS_WIN     = process.platform === 'win32';
 const IS_MAC     = process.platform === 'darwin';
 const IDLE_GRACE = 5000;    // recarregar a página reconecta bem antes disso
 const FIREFOX_DOWNLOAD = 'https://www.mozilla.org/firefox/download/';
+const CHROME_DOWNLOAD  = 'https://www.google.com/chrome/';
 
 // #region Caminhos
 function isSea() {
@@ -74,6 +77,51 @@ function findBundledPython(appDir) {
     ? path.join(appDir, 'runtime', 'python', 'python.exe')
     : path.join(appDir, 'runtime', 'python', 'bin', 'python3');
   return fs.existsSync(exe) ? exe : null;
+}
+// #endregion
+
+// #region Chrome
+function chromeCandidates() {
+  const list = [];
+  if (process.env.MS_CHROME_BROWSER) list.push(process.env.MS_CHROME_BROWSER);
+  if (IS_MAC) {
+    for (const base of ['/Applications', path.join(os.homedir(), 'Applications')]) {
+      list.push(path.join(base, 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'));
+      list.push(path.join(base, 'Microsoft Edge.app', 'Contents', 'MacOS', 'Microsoft Edge'));
+    }
+  } else if (IS_WIN) {
+    const bases = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA].filter(Boolean);
+    bases.forEach(base => list.push(path.join(base, 'Google', 'Chrome', 'Application', 'chrome.exe')));
+    for (const hive of ['HKLM', 'HKCU']) {
+      const out = execText('reg', ['query', `${hive}\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe`, '/ve']);
+      const m = out.match(/REG_SZ\s+(.+chrome\.exe)/i);
+      if (m) list.push(m[1].trim().replace(/^"|"$/g, ''));
+    }
+    // Edge vem em todo Windows e usa o mesmo motor do Chrome
+    bases.forEach(base => list.push(path.join(base, 'Microsoft', 'Edge', 'Application', 'msedge.exe')));
+  } else {
+    list.push('/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium');
+  }
+  return [...new Set(list)];
+}
+
+function findChrome() {
+  return chromeCandidates().find(p => {
+    try { return fs.statSync(p).isFile(); } catch (_) { return false; }
+  }) || null;
+}
+
+/** Janela de app (sem abas/endereço), perfil próprio, sem telas de boas-vindas */
+function chromeArgs(profileDir, url) {
+  return [
+    `--user-data-dir=${profileDir}`,
+    `--app=${url}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-features=Translate',
+    '--autoplay-policy=no-user-gesture-required',
+    '--start-maximized',
+  ];
 }
 // #endregion
 
@@ -309,21 +357,32 @@ async function main() {
   hideChildConsoles();
 
   const profileDir   = path.join(dataDir, 'firefox-profile');
+  const chromeDir    = path.join(dataDir, 'chrome-profile');
   const instanceFile = path.join(dataDir, 'instance.json');
   const stateFile    = path.join(dataDir, 'state.json');
 
   const firefox = findFirefox();
-  if (!firefox) {
-    const go = dialog('O Motion Studio usa o Firefox para abrir o editor, mas ele não foi encontrado neste computador.\nInstale o Firefox e abra o Motion Studio de novo.', 'Baixar Firefox');
-    if (go) openExternal(FIREFOX_DOWNLOAD);
+  const chromeBrowser = findChrome();
+  const saved = readJson(stateFile) || {};
+  // Chrome por padrão; Firefox só quando o WebGL falhou no Chrome desta máquina
+  // (lembrado em state.json) ou sem Chrome/Edge. MS_BROWSER=chrome|firefox força.
+  const wanted = process.env.MS_BROWSER || (saved.browser === 'firefox' ? 'firefox' : 'chrome');
+  let browserKind = (wanted === 'firefox' && firefox) || !chromeBrowser ? 'firefox' : 'chrome';
+  if (browserKind === 'firefox' && !firefox) {
+    const go = dialog('O Motion Studio precisa do Google Chrome (ou do Firefox) para abrir o editor, e nenhum dos dois foi encontrado.\nInstale o Chrome e abra o Motion Studio de novo.', 'Baixar Chrome');
+    if (go) openExternal(CHROME_DOWNLOAD);
     process.exit(1);
   }
+  const openWindow = (kind, url, extra = []) => kind === 'chrome'
+    ? cp.spawn(chromeBrowser, [...extra, ...chromeArgs(chromeDir, url)], { stdio: 'ignore' })
+    : cp.spawn(firefox, [...extra, '--profile', profileDir, url], { stdio: 'ignore' });
 
-  // Já aberto: só abre outra janela no Firefox do app (antes de mexer no log da instância viva)
+  // Já aberto: só abre outra janela no navegador do app (antes de mexer no log da instância viva)
   const running = readJson(instanceFile);
   if (running?.pid && pidAlive(running.pid) && await httpOk(`http://127.0.0.1:${running.port}/desktop.js`)) {
     console.log(`[Launcher] Já em execução (pid ${running.pid}, porta ${running.port}) — abrindo nova janela`);
-    cp.spawn(firefox, ['--profile', profileDir, `http://localhost:${running.port}/`], { detached: true, stdio: 'ignore' }).unref();
+    const kind = running.browser === 'firefox' && firefox ? 'firefox' : (chromeBrowser ? 'chrome' : 'firefox');
+    openWindow(kind, `http://localhost:${running.port}/`).unref();
     process.exit(0);
   }
 
@@ -331,10 +390,10 @@ async function main() {
   console.log(`[Launcher] ${new Date().toISOString()} · ${process.platform}-${process.arch} · Node ${process.version}`);
   console.log(`[Launcher] app: ${appDir}`);
   console.log(`[Launcher] dados: ${dataDir}`);
-  console.log(`[Launcher] Firefox: ${firefox}`);
+  console.log(`[Launcher] Chrome: ${chromeBrowser || '(não encontrado)'} · Firefox: ${firefox || '(não encontrado)'} · usando: ${browserKind}`);
 
   // Mesma porta da última vez: o localStorage do editor é por origem (localhost:porta)
-  const state = readJson(stateFile) || {};
+  const state = saved;
   const port = await pickPort(Number(process.env.PORT) || state.port || 3001);
   const whisperPort = await pickPort(Number(process.env.WHISPER_PORT) || 9099);
   if (!port || !whisperPort) {
@@ -352,6 +411,7 @@ async function main() {
     WHISPER_MODELS_DIR: process.env.WHISPER_MODELS_DIR || path.join(dataDir, 'models'),
     WHISPER_ENV_DIR:    process.env.WHISPER_ENV_DIR || path.join(dataDir, 'whisper-env'),
     AI_CONFIG_PATH:     process.env.AI_CONFIG_PATH || path.join(dataDir, 'config', 'ai.local.json'),
+    MS_PROJECTS_DIR:    process.env.MS_PROJECTS_DIR || path.join(dataDir, 'projects'),
   });
   if (chrome) process.env.MS_CHROME_PATH = chrome;
   if (python && !process.env.WHISPER_BASE_PYTHON) process.env.WHISPER_BASE_PYTHON = python;
@@ -364,7 +424,8 @@ async function main() {
   let clients = 0;
   let everConnected = false;
   let idleTimer = null;
-  let ff = null;
+  let ff = null;          // processo do navegador aberto (Chrome ou Firefox)
+  let switching = false;  // trocando Chrome → Firefox: o Chrome fechar não encerra o app
   let shuttingDown = false;
 
   const shutdown = reason => {
@@ -405,25 +466,66 @@ async function main() {
     dialog(`O servidor do Motion Studio não respondeu.\nDetalhes em ${logFile}`);
     process.exit(1);
   }
-  fs.writeFileSync(instanceFile, JSON.stringify({ pid: process.pid, port }));
+  const writeInstance = () => fs.writeFileSync(instanceFile, JSON.stringify({ pid: process.pid, port, browser: browserKind }));
+  writeInstance();
 
-  prepareFirefoxProfile(profileDir, url);
-  console.log(`[Launcher] Abrindo ${url}`);
-  // MS_FIREFOX_ARGS: argumentos extras (ex.: --headless nos testes)
-  const extra = (process.env.MS_FIREFOX_ARGS || '').split(' ').filter(Boolean);
-  ff = cp.spawn(firefox, [...extra, '--profile', profileDir, url], { stdio: 'ignore' });
-  ff.on('error', err => {
-    dialog(`Não foi possível abrir o Firefox:\n${err.message}`);
-    shutdown('falha ao abrir o Firefox');
-  });
-  ff.on('exit', code => {
-    console.log(`[Launcher] Firefox saiu (código ${code})`);
-    // Saída imediata = o perfil já estava aberto e o Firefox só repassou a URL
-    // para a instância existente: segue enquanto houver janela conectada.
-    if (everConnected && clients === 0) shutdown('Firefox fechado');
+  const label = kind => (kind === 'chrome' ? path.basename(chromeBrowser, path.extname(chromeBrowser)) : 'Firefox');
+  const launch = kind => {
+    if (kind === 'firefox') prepareFirefoxProfile(profileDir, url);
+    console.log(`[Launcher] Abrindo ${url} no ${label(kind)}`);
+    // MS_BROWSER_ARGS: argumentos extras (ex.: --headless nos testes)
+    const extra = (process.env.MS_BROWSER_ARGS || process.env.MS_FIREFOX_ARGS || '').split(' ').filter(Boolean);
+    const proc = openWindow(kind, url, extra);
+    ff = proc;
+    proc.on('error', err => {
+      dialog(`Não foi possível abrir o ${label(kind)}:\n${err.message}`);
+      shutdown(`falha ao abrir o ${label(kind)}`);
+    });
+    proc.on('exit', code => {
+      console.log(`[Launcher] ${label(kind)} saiu (código ${code})`);
+      if (switching || proc !== ff) return;
+      // Saída imediata = o perfil já estava aberto e o navegador só repassou a URL
+      // para a instância existente: segue enquanto houver janela conectada.
+      if (everConnected && clients === 0) shutdown(`${label(kind)} fechado`);
+    });
+  };
+
+  // A página informa se o WebGL funciona (desktop.js). No Chrome sem WebGL:
+  // troca para o Firefox e lembra; sem Firefox, avisa e segue no Chrome.
+  let webglChecked = false;
+  process.on('motion-studio:webgl', ({ ok }) => {
+    if (webglChecked || browserKind !== 'chrome') return;
+    webglChecked = true;
+    console.log(`[Launcher] WebGL no ${label('chrome')}: ${ok ? 'ok' : 'indisponível'}`);
+    if (ok) return;
+    if (!firefox) {
+      const go = dialog('O WebGL não funciona no Chrome deste computador: clipes 3D não vão aparecer no preview.\nO Firefox costuma resolver. Quer baixar o Firefox? Depois é só abrir o Motion Studio de novo.', 'Baixar Firefox');
+      if (go) openExternal(FIREFOX_DOWNLOAD);
+      return;
+    }
+    console.log('[Launcher] Trocando para o Firefox (WebGL indisponível no Chrome)');
+    fs.writeFileSync(stateFile, JSON.stringify({ ...readJson(stateFile), browser: 'firefox' }));
+    switching = true;
+    const old = ff;
+    browserKind = 'firefox';
+    writeInstance();
+    launch('firefox');
+    // Fecha o Chrome depois que a janela do Firefox conectar (o app não "pisca" fechado)
+    const started = Date.now();
+    const wait = setInterval(() => {
+      if (clients < 2 && Date.now() - started < 15000) return;
+      clearInterval(wait);
+      if (old && old.exitCode === null) {
+        if (IS_WIN) execText('taskkill', ['/pid', String(old.pid), '/T', '/F']);
+        else old.kill('SIGTERM');
+      }
+      setTimeout(() => { switching = false; }, 2000);
+    }, 300);
   });
 
-  // Nenhuma janela conectou (Firefox fechado na hora, perfil travado…)
+  launch(browserKind);
+
+  // Nenhuma janela conectou (navegador fechado na hora, perfil travado…)
   setTimeout(() => { if (!everConnected) shutdown('nenhuma janela do editor conectou'); }, 120000);
 }
 

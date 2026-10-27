@@ -50,12 +50,16 @@ NO_SPEECH_THRESHOLD   = 0.45
 LOGPROB_THRESHOLD     = -1.2
 COMPRESSION_RATIO_THR = 2.4
 
-# Temperatura fixa em 0; só repete (com busca mais ampla) se o resultado parecer alucinação
+# Temperatura fixa em 0; só repete (com busca mais ampla) se o resultado parecer
+# alucinação ou incompleto. As repetições usam o modelo sem lote (outro caminho na GPU).
 RETRY_CONFIGS = [
     {"beam_size": 5,  "patience": 1.0},
-    {"beam_size": 5,  "patience": 1.5},
-    {"beam_size": 10, "patience": 2.0},
+    {"beam_size": 5,  "patience": 1.5, "plain": True},
+    {"beam_size": 10, "patience": 2.0, "plain": True},
 ]
+VAD_PARAMS = {"threshold": 0.4, "min_silence_duration_ms": 500, "speech_pad_ms": 200}
+# Fala normal tem 2–3 palavras/s; abaixo disto a transcrição perdeu trechos
+MIN_WORDS_PER_SPEECH_SEC = 0.8
 
 # ── Anti-alucinação ────────────────────────────────────────────────────────────
 # Só frases que o Whisper inventa em silêncio/música. Falas curtas são legítimas.
@@ -150,8 +154,11 @@ def _pick_compute(device: str, ctranslate2) -> str:
         supported = set(ctranslate2.get_supported_compute_types(device))
     except Exception:
         supported = set()
-    # GPUs antigas (GTX 9xx/10xx) não têm float16 eficiente → int8_float32 em vez de crash
-    prefs = ["float16", "int8_float16", "int8_float32", "int8", "float32"] if device == "cuda" \
+    # int8_float16 antes de float16: em float16 puro o large-v3 dá resultados
+    # instáveis em algumas GPUs (RTX 20xx: o mesmo áudio saía inteiro, pela
+    # metade ou vazio). int8_float16 é estável, usa menos VRAM e tem a mesma
+    # velocidade. GPUs antigas (GTX 9xx/10xx) caem em int8_float32.
+    prefs = ["int8_float16", "float16", "int8_float32", "int8", "float32"] if device == "cuda" \
         else ["int8", "int8_float32", "float32"]
     for p in prefs:
         if p in supported:
@@ -486,6 +493,19 @@ def _merge_word_pieces(words) -> list:
             out.append({"word": w.word.strip(), "start": w.start, "end": w.end})
     return out
 
+def _count_words(segments: list) -> int:
+    return sum(len(s.get("words") or []) for s in segments)
+
+def _speech_seconds(audio) -> float:
+    """Segundos de fala segundo o VAD (o mesmo que a transcrição usa)."""
+    try:
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+        stamps = get_speech_timestamps(audio, VadOptions(**VAD_PARAMS))
+        return sum(t["end"] - t["start"] for t in stamps) / SAMPLE_RATE
+    except Exception as e:
+        _print(f"[Whisper] VAD indisponível para conferir a transcrição ({e})")
+        return 0.0
+
 def _transcribe_once(audio, language, cfg: dict) -> dict:
     kwargs = dict(
         language=language,
@@ -494,7 +514,7 @@ def _transcribe_once(audio, language, cfg: dict) -> dict:
         temperature=0.0,
         word_timestamps=True,
         vad_filter=True,
-        vad_parameters={"threshold": 0.4, "min_silence_duration_ms": 500, "speech_pad_ms": 200},
+        vad_parameters=VAD_PARAMS,
         condition_on_previous_text=False,
         no_speech_threshold=NO_SPEECH_THRESHOLD,
         log_prob_threshold=LOGPROB_THRESHOLD,
@@ -502,7 +522,7 @@ def _transcribe_once(audio, language, cfg: dict) -> dict:
         # pula trechos inventados em silêncios longos (precisa de word_timestamps)
         hallucination_silence_threshold=2.0,
     )
-    if _pipeline is not None:
+    if _pipeline is not None and not cfg.get("plain"):
         segs, info = _pipeline.transcribe(audio, batch_size=BATCH_SIZE, **kwargs)
     else:
         segs, info = _model.transcribe(audio, **kwargs)
@@ -523,6 +543,7 @@ def transcribe(audio_path: str, language: str | None = None, padding: float = 0.
     best_result, best_clean = None, []
     # Em CPU cada tentativa custa caro — no máximo 2
     configs = RETRY_CONFIGS if DEVICE == "cuda" else RETRY_CONFIGS[:2]
+    speech_sec = _speech_seconds(audio)
 
     for attempt, cfg in enumerate(configs, start=1):
         _print(f"[Whisper] Tentativa {attempt}/{len(configs)} | beam={cfg['beam_size']} patience={cfg['patience']}")
@@ -536,13 +557,20 @@ def transcribe(audio_path: str, language: str | None = None, padding: float = 0.
         if n_filtered:
             _print(f"[Whisper] {n_filtered} segmento(s) filtrados como alucinação")
 
-        if score["valid"]:
+        n_words = _count_words(score["clean_segments"])
+        # Poucas palavras para o tanto de fala que o VAD achou = transcrição
+        # que perdeu trechos (acontece na GPU de forma intermitente): repete
+        incomplete = speech_sec >= 3 and n_words < speech_sec * MIN_WORDS_PER_SPEECH_SEC
+        if score["valid"] and not incomplete:
             best_result, best_clean = raw, score["clean_segments"]
             break
-        _print(f"[Whisper] Rejeitado — {score['reason']}")
-        if score["reason"] == "sem_segmentos":
-            break  # VAD não achou fala: repetir não muda nada
-        if best_result is None or len(score["clean_segments"]) > len(best_clean):
+        if score["valid"]:
+            _print(f"[Whisper] Incompleta — {n_words} palavras para {speech_sec:.1f}s de fala")
+        else:
+            _print(f"[Whisper] Rejeitado — {score['reason']}")
+            if score["reason"] == "sem_segmentos" and speech_sec < 3:
+                break  # VAD não achou fala: repetir não muda nada
+        if best_result is None or n_words > _count_words(best_clean):
             best_result, best_clean = raw, score["clean_segments"]
 
     detected_lang = detected_lang or language or "pt"

@@ -17,8 +17,8 @@
   --blue:         #3b9eff;
   --blue-dim:     rgba(59,158,255,.12);
   --text:         #dcdce8;
-  --text-muted:   #5e5e72;
-  --text-dim:     #3a3a48;
+  --text-muted:   #8b8ba0;
+  --text-dim:     #66667c;
   --danger:       #ff4455;
   --danger-dim:   rgba(255,68,85,.12);
 
@@ -26,11 +26,27 @@
   --toolbar-h:    0px;
   --panel-left-w: 230px;
   --panel-right-w:240px;
-  --timeline-h:   200px;
+  --timeline-h:   270px;
   --radius:       8px;
   --radius-sm:    5px;
   --radius-xs:    3px;
 }
+
+/* Preview em janela separada (preview-window.js): aviso no lugar do palco */
+.pw-placeholder {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.pw-placeholder p { font-size: 13px; font-weight: 600; color: var(--text); }
+.pw-placeholder-actions { display: flex; gap: 8px; }
+body.pw-detached .preview-zoom-controls .pz-btn:not(.pz-popout),
+body.pw-detached #previewZoomLabel { opacity: .35; pointer-events: none; }
+body.pw-detached .pz-popout { color: var(--accent); border-color: var(--accent); }
 
 html, body {
   width: 100%; height: 100%;
@@ -2708,6 +2724,14 @@ body.is-resizing-panel iframe {
 .sc-status { margin: 0 0 10px; font-size: 12px; color: var(--text); }
 .sc-status.is-error { color: var(--danger); }
 .sc-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: 11px; cursor: pointer; text-decoration: underline; }
+
+/* Retomar / recuperar uma geração (progresso salvo no projeto) */
+.sc-resume, .sc-recover { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; margin-bottom: 12px; background: var(--bg3); border: 1px solid var(--accent-mid); border-radius: var(--radius-sm); font-size: 12px; line-height: 1.5; color: var(--text); }
+.sc-recover { border-color: var(--border3); }
+.sc-resume[hidden], .sc-recover[hidden] { display: none; }
+.sc-resume-actions, .sc-recover-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sc-recover-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-muted); }
+.sc-recover-row select { flex: 1; width: 100%; max-width: none; min-width: 0; }
 
 .sc-style { padding: 10px 12px; margin-bottom: 10px; background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--radius-sm); }
 .sc-style-head { display: flex; align-items: center; gap: 10px; }

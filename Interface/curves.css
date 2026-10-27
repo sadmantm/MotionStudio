@@ -1,0 +1,95 @@
+/* curves.css — curvas de animação dos keyframes (curves.js) */
+
+/* #region Seção "Animação" do painel do clip */
+.cv-props .cv-time { margin-left: 6px; font-size: 10px; font-weight: 600; color: #22d3ee; text-transform: none; letter-spacing: 0; }
+.cv-hint { margin: 0 0 8px; font-size: 11px; line-height: 1.45; color: var(--text-muted); }
+.cv-hint b { color: var(--text); }
+.cv-hint code { padding: 0 3px; border-radius: 3px; background: var(--bg4); font-size: 10.5px; }
+
+.cv-graph { pointer-events: auto; width: 100%; height: auto; display: block; border-radius: var(--radius-sm); background: var(--bg); user-select: none; }
+.cv-frame { fill: rgba(255, 255, 255, .02); stroke: var(--border2); stroke-width: .6; }
+.cv-guide { stroke: var(--border3); stroke-width: .6; stroke-dasharray: 2 2; }
+.cv-axis { fill: var(--text-muted); font-size: 6.5px; }
+.cv-line { fill: none; stroke: #22d3ee; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.cv-arm { stroke: rgba(255, 255, 255, .35); stroke-width: .8; }
+.cv-handle { fill: #fbbf24; stroke: #0c0c10; stroke-width: 1.2; cursor: grab; pointer-events: all; }
+.cv-handle:hover { fill: #fff; }
+.cv-ball { fill: #fff; stroke: #22d3ee; stroke-width: 1.5; }
+
+.cv-tools { display: flex; gap: 6px; margin: 8px 0; }
+.cv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.cv-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 2px 4px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  background: var(--bg3);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cv-card:hover { border-color: var(--border3); color: var(--text); background: var(--bg4); }
+.cv-card.is-on { border-color: #22d3ee; color: #22d3ee; background: rgba(34, 211, 238, .08); }
+.cv-card svg { display: block; }
+.cv-m-grid { stroke: var(--border3); stroke-width: .5; stroke-dasharray: 1.5 1.5; }
+.cv-m-line { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.cv-card span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-del { position: absolute; top: 1px; right: 2px; font-style: normal; font-size: 9px; color: var(--text-muted); opacity: 0; }
+.cv-card:hover .cv-del { opacity: 1; }
+.cv-del:hover { color: var(--danger); }
+/* #endregion */
+
+/* #region Modal "Nova curva" */
+#cvModal[hidden] { display: none !important; }
+.cv-modal { width: 760px; }
+.cv-body { flex-direction: row; gap: 18px; align-items: flex-start; }
+.cv-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.cv-preview { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
+.cv-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.cv-tabs button {
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cv-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.cv-pane { display: flex; flex-direction: column; gap: 8px; }
+.cv-pane[hidden] { display: none; }
+.cv-side .prop-input.full { width: 100%; max-width: none; box-sizing: border-box; }
+.cv-prompt { resize: vertical; min-height: 80px; font-family: inherit; line-height: 1.45; }
+.cv-code { resize: vertical; font-family: 'Fira Code', 'Courier New', monospace; font-size: 11px; line-height: 1.45; white-space: pre; }
+.cv-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cv-status, .cv-msg, .cv-json { font-size: 11px; color: var(--text-muted); }
+.cv-status[data-kind="error"], .cv-msg[data-kind="error"] { color: var(--danger); }
+.cv-msg[data-kind="ok"] { color: var(--accent); }
+.cv-msg { margin-right: auto; }
+.cv-link { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 11px; cursor: pointer; }
+.cv-link:hover { text-decoration: underline; }
+.cv-spec {
+  max-height: 220px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.cv-spec[hidden] { display: none; }
+.cv-modal .export-btn:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 800px) { .cv-body { flex-direction: column; } .cv-preview { width: 100%; } }
+/* #endregion */

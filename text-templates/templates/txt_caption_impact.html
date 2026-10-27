@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root { --hl: {{highlightColor}}; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body { position: relative; font-family: {{fontFamily}}; }
+
+  /* Área da legenda. bottom/padding vêm do script conforme a proporção do projeto. */
+  .cap-safe {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .cap-block {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    background: {{bg}};
+    border-radius: 0.22em;
+    transform-origin: 50% 100%;
+    opacity: 0;
+    font-size: {{fontSize}}px;
+  }
+
+  #__txt_el {
+    display: block;
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+    line-height: 1.18;
+    white-space: normal;
+    overflow-wrap: break-word;
+    text-shadow:
+      0.06em 0 0 rgba(0,0,0,.9), -0.06em 0 0 rgba(0,0,0,.9),
+      0 0.06em 0 rgba(0,0,0,.9), 0 -0.06em 0 rgba(0,0,0,.9),
+      0.045em 0.045em 0 rgba(0,0,0,.9), -0.045em 0.045em 0 rgba(0,0,0,.9),
+      0.045em -0.045em 0 rgba(0,0,0,.9), -0.045em -0.045em 0 rgba(0,0,0,.9),
+      0 0.09em 0.22em rgba(0,0,0,.55);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  .cw {
+    display: inline-block;
+    margin: 0 0.05em;
+    transform-origin: 50% 70%;
+    will-change: transform, opacity;
+    
+  }
+  
+</style>
+</head>
+<body>
+  <div class="cap-safe" id="__cap_safe">
+    <div class="cap-block" id="__cap_block">
+      <div id="__txt_el">{{text}}</div>
+    </div>
+  </div>
+
+<script type="application/json" id="__words">{{wordsJson}}</script>
+
+<script>
+(function () {
+  'use strict';
+
+  // Função pura de t: sem rAF, timers ou Date.now (export/WVC).
+  var W   = Number('{{w}}') || 1080;
+  var H   = Number('{{h}}') || 1920;
+  var FPS = 30;
+  var DUR = Number('{{duration}}') || 2;
+  var HIGHLIGHT = getComputedStyle(document.documentElement).getPropertyValue('--hl').trim();
+  if (!HIGHLIGHT || !(window.CSS && CSS.supports && CSS.supports('color', HIGHLIGHT))) HIGHLIGHT = '#ffd34d';
+  var LAYOUT = 'bottom';   // 'bottom' (lower-third) | 'center'
+
+  var safe  = document.getElementById('__cap_safe');
+  var block = document.getElementById('__cap_block');
+  var el    = document.getElementById('__txt_el');
+  
+
+  // ── Área segura (UI do TikTok/Reels/Shorts no 9:16; títulos no 16:9) ──
+  (function layoutSafeArea() {
+    var ratio = H / W;
+    var bottom, side;
+    if (ratio >= 1.4)      { bottom = H * 0.22; side = W * 0.08; }
+    else if (ratio >= 0.9) { bottom = H * 0.14; side = W * 0.08; }
+    else                   { bottom = H * 0.10; side = W * 0.12; }
+    if (LAYOUT === 'center') {
+      safe.style.top = '0'; safe.style.bottom = '0'; safe.style.alignItems = 'center';
+      block.style.transformOrigin = '50% 50%';
+    } else {
+      safe.style.bottom = Math.round(bottom) + 'px';
+    }
+    safe.style.paddingLeft  = Math.round(side) + 'px';
+    safe.style.paddingRight = Math.round(side) + 'px';
+    var align = getComputedStyle(el).textAlign;
+    safe.style.justifyContent =
+      align === 'left' || align === 'start' ? 'flex-start'
+        : align === 'right' || align === 'end' ? 'flex-end' : 'center';
+    var bg = getComputedStyle(block).backgroundColor || '';
+    var transparent = !bg || bg === 'transparent' || /rgba\([^)]*,\s*0\)$/.test(bg);
+    if (!transparent) block.style.padding = '0.14em 0.42em 0.18em';
+  })();
+
+  function readText(node) {
+    var out = '';
+    node.childNodes.forEach(function (child) {
+      if (child.nodeType === 3) out += child.nodeValue;
+      else if (child.nodeName === 'BR') out += '\n';
+      else if (child.nodeType === 1 && child.id !== '__ul') out += readText(child);
+    });
+    return out;
+  }
+
+  function readWordsJson() {
+    try {
+      var raw = (document.getElementById('__words') || {}).textContent || '';
+      if (!raw.trim()) return null;
+      var arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : null;
+    } catch (_) { return null; }
+  }
+
+  var JSON_WORDS = readWordsJson();
+  var words = [];
+  var sentinel = null;
+  var builtFor = null;
+
+  function evenTimings(tokens) {
+    var lead = Math.min(0.08, DUR * 0.04);
+    var tail = Math.min(0.30, DUR * 0.15);
+    var span = Math.max(0.05, DUR - lead - tail);
+    var weights = tokens.map(function (w) { return w.replace(/[^\p{L}\p{N}]/gu, '').length + 2; });
+    var total = weights.reduce(function (a, b) { return a + b; }, 0) || 1;
+    var acc = lead;
+    return weights.map(function (wgt) {
+      var s = acc;
+      acc += span * wgt / total;
+      return { start: s, end: acc };
+    });
+  }
+
+  function jsonTimings(count) {
+    if (!JSON_WORDS || JSON_WORDS.length !== count) return null;
+    var out = [];
+    for (var i = 0; i < count; i++) {
+      var s = Number(JSON_WORDS[i] && JSON_WORDS[i].start);
+      var e = Number(JSON_WORDS[i] && JSON_WORDS[i].end);
+      if (!isFinite(s)) return null;
+      if (!isFinite(e) || e < s) e = s;
+      s = Math.max(0, Math.min(DUR, s));
+      e = Math.max(s, Math.min(DUR, e));
+      if (i > 0 && s < out[i - 1].start) s = out[i - 1].start;
+      out.push({ start: s, end: e });
+    }
+    return out;
+  }
+
+  function build() {
+    var text = readText(el).replace(/\r/g, '');
+    var lines = text.split('\n');
+    var tokens = [];
+    var frag = document.createDocumentFragment();
+
+    lines.forEach(function (line, li) {
+      var parts = line.split(/\s+/).filter(Boolean);
+      parts.forEach(function (word, wi) {
+        var span = document.createElement('span');
+        span.className = 'cw';
+        span.textContent = word;
+        frag.appendChild(span);
+        if (wi < parts.length - 1) frag.appendChild(document.createTextNode(' '));
+        tokens.push({ word: word, el: span });
+      });
+      if (li < lines.length - 1 && parts.length) frag.appendChild(document.createElement('br'));
+    });
+
+    sentinel = document.createElement('span');
+    sentinel.style.display = 'none';
+    frag.appendChild(sentinel);
+
+    el.textContent = '';
+    el.appendChild(frag);
+
+    var times = jsonTimings(tokens.length) || evenTimings(tokens.map(function (t) { return t.word; }));
+    words = tokens.map(function (t, i) { return { el: t.el, start: times[i].start, end: times[i].end }; });
+    builtFor = DUR;
+  }
+
+  function ensureBuilt() {
+    if (!sentinel || sentinel.parentNode !== el || builtFor !== DUR) build();
+  }
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function easeOutCubic(p) { p = clamp(p, 0, 1); return 1 - Math.pow(1 - p, 3); }
+  function easeOutBack(p) {
+    p = clamp(p, 0, 1);
+    var c1 = 1.9, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+  }
+  function lerp(a, b, p) { return a + (b - a) * p; }
+
+  /** Palavra "da vez": a última que já começou (fica ativa até a próxima começar) */
+  function activeIndex(t) {
+    var idx = -1;
+    for (var i = 0; i < words.length; i++) if (t >= words[i].start - 1e-6) idx = i;
+    return idx;
+  }
+
+  // ── Estilo próprio deste modelo ──
+  function styleWord(w, nextW, i, t, a) {
+    var s = w.el.style;
+    if (t < w.start) { s.opacity = '0'; s.transform = 'scale(0.5)'; s.color = ''; return; }
+    var local = t - w.start;
+    var now = i === a;
+    // soco: passa do tamanho e assenta; gira para um lado e para o outro
+    var punch = now ? 1 + 0.32 * (1 - easeOutCubic(local / 0.22)) + 0.12 : 1;
+    var tilt = now ? (i % 2 ? 1 : -1) * 4 * (1 - easeOutCubic(local / 0.3)) : 0;
+    s.opacity = String(clamp(local / 0.05, 0, 1));
+    s.transform = 'rotate(' + tilt.toFixed(2) + 'deg) scale(' + punch.toFixed(4) + ')';
+    s.color = now ? HIGHLIGHT : '';
+  }
+
+  function seek(t) {
+    t = Number(t);
+    if (!isFinite(t) || t < 0) t = 0;
+    ensureBuilt();
+
+    // Entrada/saída do bloco inteiro
+    var IN  = Math.min(0.08, DUR * 0.15);
+    var OUT = Math.min(0.1, DUR * 0.12);
+    var blockOpacity = 1;
+    var blockShift = 0;
+    if (t <= 0) blockOpacity = 0;
+    else if (t < IN) { var pi = easeOutCubic(t / IN); blockOpacity = pi; blockShift = (1 - pi) * 0.25; }
+    if (t > DUR - OUT) blockOpacity = Math.min(blockOpacity, clamp((DUR - t) / Math.max(0.001, OUT), 0, 1));
+    block.style.opacity = String(blockOpacity);
+    block.style.transform = 'translateY(' + blockShift.toFixed(4) + 'em)';
+
+    var a = activeIndex(t);
+    for (var i = 0; i < words.length; i++) styleWord(words[i], words[i + 1], i, t, a);
+    if (typeof afterWords === 'function') afterWords(t, a);
+  }
+
+  function fontsReady() {
+    if (!document.fonts || !document.fonts.load) return Promise.resolve();
+    var cs = getComputedStyle(el);
+    var spec = cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+    return Promise.all([document.fonts.load(spec, readText(el) || 'Aa'), document.fonts.ready]).then(function () {}, function () {});
+  }
+
+  var readyPromise = null;
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: FPS,
+      get totalFrames() { return Math.round(DUR * FPS); },
+    },
+    whenReady: function () {
+      if (!readyPromise) readyPromise = fontsReady();
+      return readyPromise;
+    },
+    setDuration: function (d) {
+      d = Number(d);
+      if (isFinite(d) && d > 0) { DUR = d; build(); }
+    },
+    seek: seek,
+    renderFrame: function (f) { seek((Number(f) || 0) / FPS); },
+  };
+
+  build();
+  seek(0);
+})();
+</script>
+</body>
+</html>

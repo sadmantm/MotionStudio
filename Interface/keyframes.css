@@ -1,0 +1,89 @@
+/* keyframes.css — keyframes de volume e de animação (keyframes.js) */
+
+/* #region Painel: ‹ ◇ › ao lado do volume */
+.kf-ctl { display: inline-flex; align-items: center; gap: 1px; margin-left: 4px; flex-shrink: 0; }
+.kf-diamond, .kf-nav {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.kf-nav { width: 16px; }
+.kf-diamond:hover, .kf-nav:hover { color: var(--text); background: var(--bg4); }
+.kf-diamond svg path { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
+.kf-diamond.is-on { color: #22d3ee; }
+.kf-diamond.is-on svg path { fill: currentColor; }
+.kf-diamond:disabled { opacity: .35; cursor: not-allowed; background: none; }
+/* #endregion */
+
+/* #region Timeline: linha de volume e losangos sobre o bloco */
+.tl-kf { position: absolute; inset: 0; z-index: 5; pointer-events: none; display: none; overflow: hidden; }
+.tl-block.tl-selected .tl-kf, .tl-kf.has-keys { display: block; }
+.tl-kf-svg { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.tl-kf-line { fill: none; stroke: rgba(255, 255, 255, .85); stroke-width: 1.5; stroke-linejoin: round; filter: drop-shadow(0 0 2px rgba(0, 0, 0, .9)); }
+.tl-kf.has-keys .tl-kf-line { stroke: #22d3ee; }
+.tl-kf-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: none; }
+.tl-block.tl-selected .tl-kf-hit { pointer-events: stroke; cursor: ns-resize; }
+.tl-block.tl-selected .tl-kf.has-keys .tl-kf-hit { cursor: copy; }
+
+.tl-kf-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  background: #fff;
+  border: 1.5px solid #0c0c10;
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, .9), 0 1px 3px rgba(0, 0, 0, .6);
+  pointer-events: none;
+}
+.tl-block.tl-selected .tl-kf-dot { pointer-events: auto; cursor: grab; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; }
+.tl-block.tl-selected .tl-kf-dot:hover { background: #22d3ee; transform: rotate(45deg) scale(1.2); }
+body.tl-kf-dragging, body.tl-kf-dragging * { cursor: grabbing !important; }
+/* #endregion */
+
+/* #region Timeline: faixa de losangos da animação (escala, posição, rotação, cor) */
+.tl-kfl {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 22px;
+  height: 12px;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
+}
+.tl-kfl-seg {
+  position: absolute;
+  top: 5px;
+  height: 2px;
+  background: rgba(34, 211, 238, .55);
+  border-radius: 1px;
+}
+.tl-kfl-seg.has-curve { background: #fbbf24; height: 3px; top: 4.5px; }
+.tl-kfl-dot {
+  position: absolute;
+  top: 1px;
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  background: #fff;
+  border: 1.5px solid #0c0c10;
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, .9), 0 1px 3px rgba(0, 0, 0, .6);
+  pointer-events: none;
+}
+.tl-kfl-dot.has-curve { background: #fbbf24; }
+.tl-kfl-dot.is-active { background: #22d3ee; box-shadow: 0 0 0 2px #fff, 0 0 8px rgba(34, 211, 238, .9); }
+.tl-block.tl-selected .tl-kfl-dot { pointer-events: auto; cursor: grab; }
+.tl-block.tl-selected .tl-kfl-dot:hover { transform: rotate(45deg) scale(1.25); }
+/* #endregion */

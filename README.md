@@ -38,6 +38,23 @@ npm run desktop:build
 
 No macOS também é possível abrir o `Motion Studio.command`.
 
+## Teclado e comandos
+
+- **Ctrl+K** abre a paleta de comandos (busca ações, efeitos, projetos e marcadores) e **?** abre a Central de atalhos, onde cada atalho pode ser trocado.
+- Reprodução: **Espaço**, **J / K / L** (voltar / parar / avançar; repetir acelera), **← →** um quadro, **Shift+← →** um segundo, **↑ ↓** entre cortes.
+- Edição: **S** corta, **Q / W** cortam e removem antes / depois da agulha, **Del** exclui, **Shift+Del** fecha o espaço.
+- Marcadores: **M** marca, **I / O** definem uma região de trabalho, **Shift+↑ ↓** pulam entre marcadores.
+
+## Camadas, mesclagem e câmera 2D
+
+- **Botão direito numa área vazia da timeline → Nova camada** (estilo After Effects / Photoshop): Sólido (cor), Gradiente, Forma, Camada de ajuste (o filtro age sobre tudo abaixo), Câmera 2D, Vinheta, Grão de filme, Barras de cinema e Texto. Tudo editável depois no painel da direita.
+- **Mesclagem:** botão direito num clip → Modo de mesclagem (ou Efeitos › Mesclagem): Multiplicar, Tela, Sobrepor, Luz suave…
+- **Câmera 2D:** move, aproxima e gira o que está *abaixo* dela (o que está acima fica fixo), com keyframes e curvas. A IA planeja os movimentos pela fala e pela posição dos elementos das cenas HTML: **Gemini integrado**, **Copiar prompt de explicação** (`libs/camera-spec.js`, também em `/api/camera/spec`) e **Colar o JSON de outra IA**.
+
+## Curvas de animação
+
+Cada keyframe aceita uma curva (bezier ou por pontos). Para criar curvas novas com outra IA, use **＋ Nova curva → Colar código → Copiar instruções para outra IA**: o texto explica o formato (`libs/curve-spec.js`, também servido em `/api/curves/spec`).
+
 ## Estrutura
 
 | Pasta | Conteúdo |

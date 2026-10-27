@@ -1,0 +1,114 @@
+/* fx-timeline.css — efeitos do clip visíveis no bloco da timeline (fx-timeline.js) */
+
+/* #region Faixa de chips */
+.tl-fxbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 2px 2px;
+  pointer-events: none;      /* só os chips respondem */
+}
+.tl-fxlane { position: relative; display: flex; gap: 2px; height: 14px; }
+.tl-fxlane-span { min-width: 0; }
+.tl-fxlane-edge .tl-fxe { position: absolute; top: 0; height: 14px; }
+
+.tl-fxc {
+  --fx-c: #a78bfa;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 18px;
+  max-width: 100%;
+  height: 14px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--fx-c);
+  color: #0c0c10;
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .5);
+  transition: filter .1s, transform .1s;
+}
+.tl-fxc i { font-style: normal; font-size: 9px; flex-shrink: 0; }
+.tl-fxc span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tl-fxc:hover { filter: brightness(1.18); transform: translateY(-1px); }
+.tl-fxlane-edge .tl-fxc { width: 100%; }
+
+.tl-fxc-look   { --fx-c: #a78bfa; }
+.tl-fxc-adjust { --fx-c: #fb923c; }
+.tl-fxc-motion { --fx-c: #22d3ee; }
+.tl-fxc-flip   { --fx-c: #f472b6; }
+.tl-fxc-blend  { --fx-c: #2dd4bf; }
+.tl-fxc-in, .tl-fxc-out { --fx-c: #fbbf24; }
+.tl-fxc-trans  { --fx-c: var(--accent, #82ea00); }
+
+/* Bloco estreito: só os ícones (o nome vai no tooltip) */
+@container (max-width: 130px) { .tl-fxc span { display: none; } .tl-fxc { padding: 0 4px; } }
+
+/* Borda interna: pega para mudar a duração */
+.tl-fxgrip {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 7px;
+  z-index: 2;
+  cursor: ew-resize;
+  pointer-events: auto;
+  background: rgba(12, 12, 16, .55);
+  border-radius: 2px;
+}
+.tl-fxgrip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  margin-left: -.5px;
+  background: rgba(255, 255, 255, .9);
+}
+.tl-fxgrip-r { right: -2px; }
+.tl-fxgrip-l { left: -2px; }
+.tl-fxgrip:hover { background: rgba(12, 12, 16, .85); }
+body.tl-fx-resizing, body.tl-fx-resizing * { cursor: ew-resize !important; }
+
+/* Duração (canto de baixo) fica no topo para não sobrepor os chips */
+.tl-block.tl-has-fxbar .tl-block-dur { align-self: flex-start; }
+.tl-fx-tip {
+  position: fixed;
+  z-index: 9999;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #0c0c10;
+  border: 1px solid var(--accent, #82ea00);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+}
+/* #endregion */
+
+/* #region Rampas e selos */
+.tl-block.tl-has-fxbar { box-shadow: 0 2px 8px rgba(0, 0, 0, .35), inset 0 -2px 0 rgba(167, 139, 250, .55); }
+.tl-badge-fx { background: #a78bfa; }
+.tl-badge-kf { background: #22d3ee; }
+/* Destaque do controle no painel quando se clica no chip */
+.fx-flash { animation: fx-flash 1.3s ease-out; border-radius: 4px; }
+@keyframes fx-flash {
+  0%, 35% { box-shadow: 0 0 0 2px var(--accent, #82ea00), 0 0 16px rgba(130, 234, 0, .5); background: rgba(130, 234, 0, .14); }
+  100% { box-shadow: 0 0 0 0 transparent; background: transparent; }
+}
+/* #endregion */

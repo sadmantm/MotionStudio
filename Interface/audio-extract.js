@@ -43,6 +43,8 @@
   /** Cria ou atualiza o clip de áudio ligado a `source` (link: 'audioClipId' | 'sfxClipId') */
   function upsertLinkedAudio(source, template, clipFields, link = 'audioClipId') {
     const st = appState();
+    // Áudio extraído vira asset da biblioteca; a faixa de efeitos sonoros, não
+    template.inLibrary = link === 'audioClipId';
     st.templates.push(template);
     const existing = st.clips.find(c => c.id === source[link] && c.linkedClipId === source.id);
     if (existing) {
@@ -142,7 +144,7 @@
    * Sintetiza `cues` (já em segundos do clip na timeline) numa faixa ligada a
    * `clip` por sfxClipId. → número de sons usados.
    */
-  async function renderSfxTrack(clip, cues, { pushUndo = false, pack = null } = {}) {
+  async function renderSfxTrack(clip, cues, { pushUndo = false, pack = null, credits = null } = {}) {
     const st = appState();
     const placed = cues.filter(c => c.t >= 0 && c.t < clip.duration);
     if (!placed.length) return 0;
@@ -166,6 +168,8 @@
       color: clip.color,
       sfxCues: stats.used,
       sfxPack: pack,
+      // Sons do Openverse usados aqui (título, autor, licença): CC BY pede crédito
+      ...(credits?.length ? { sfxCredits: credits } : {}),
     };
     upsertLinkedAudio(clip, template, {
       label: `🔊 ${clip.label}`,
@@ -312,6 +316,8 @@
     let done = 0;
     let pack = null;
     let undoPushed = false;
+    const openverse = new Set();
+    const attributions = new Set();
     try {
       status(`🔊 Preparando ${clips.length} clip(s)…`);
       for (let i = 0; i < clips.length; i += SFX_BATCH) {
@@ -325,6 +331,7 @@
           project: { w: st.project.res.w, h: st.project.res.h, fps: st.project.fps },
         });
         pack = pack || res.pack;
+        window.MotionSFX.addExternal(res.external);
         for (const item of res.clips) {
           const clip = st.clips.find(c => c.id === item.id);
           const tmpl = clip && st.templates.find(t => t.id === clip.templateId);
@@ -332,21 +339,23 @@
           const cues = window.MotionSFX.normalizeCues(item.cues)
             .map(c => ({ ...c, t: tmpl.type === 'html' ? cueOffset(clip, tmpl, c.t) : c.t }));
           if (!undoPushed) { window.__tlPushUndo?.(); undoPushed = true; }
-          const n = await renderSfxTrack(clip, cues, { pack });
+          const credits = [...new Set(cues.filter(c => res.external?.[c.sound]).map(c => c.sound))].map(id => ({ id, ...res.external[id] }));
+          credits.forEach(c => { openverse.add(c.id); if (c.attribution) attributions.add(c.attribution); });
+          const n = await renderSfxTrack(clip, cues, { pack, credits });
           total += n;
           if (n) done++;
         }
       }
       refresh();
       status(total
-        ? `🔊 ${total} efeitos sonoros em ${done} clip(s)${pack ? ` · pacote ${pack}` : ''}`
+        ? `🔊 ${total} efeitos sonoros em ${done} clip(s)${pack ? ` · pacote ${pack}` : ''}${openverse.size ? ` · ${openverse.size} do Openverse` : ''}${attributions.size ? ` · crédito necessário (CC BY): ${[...attributions].join(' ')}` : ''}`
         : '🔊 A IA não sugeriu sons para esses clips');
       return { total, clips: done, pack };
     } catch (err) {
       console.error('[Áudio] Efeitos sonoros com IA:', err);
       if (undoPushed) refresh();
       status(`🔊 Falha: ${err.message}`);
-      alert(`Não foi possível gerar os efeitos sonoros:\n${err.message}`);
+      window.MSUI.notify(`Não foi possível gerar os efeitos sonoros:\n${err.message}`);
       return { total, clips: done, pack, error: err.message };
     } finally {
       sfxBusy = false;
@@ -372,7 +381,7 @@
     } catch (err) {
       console.error('[Áudio] Falha ao extrair:', err);
       status(`Falha ao extrair áudio: ${err.message}`);
-      alert(`Não foi possível extrair o áudio:\n${err.message}`);
+      window.MSUI.notify(`Não foi possível extrair o áudio:\n${err.message}`);
     }
   };
 

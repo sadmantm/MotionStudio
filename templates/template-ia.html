@@ -359,6 +359,7 @@
   <ul>
     <li><code>t</code>: segundos do clipe (mesmo relógio de <code>seek</code>). Opcionais: <code>gain</code> 0–1 (padrão 0.8), <code>pitch</code> (1 = normal), <code>pan</code> −1…1, <code>dur</code> em segundos.</li>
     <li>Sintetizados (<code>type</code>): <code>whoosh</code>, <code>swipe</code>, <code>riser</code>, <code>impact</code>, <code>bass</code>, <code>pop</code>, <code>click</code>, <code>tick</code>, <code>typing</code>, <code>ding</code>, <code>chime</code>, <code>success</code>, <code>notification</code>, <code>coin</code>, <code>glitch</code>.</li>
+    <li>Biblioteca <code>sfxkit</code> (CC0, 320 sons neutros): <code>sound: "sfxkit/&lt;som&gt;"</code>, ex.: <code>"sfxkit/whoosh-medium-soft"</code>, <code>"sfxkit/pop-small-in"</code>, <code>"sfxkit/impact-medium-soft"</code>. O editor alinha o ponto de ataque do som ao <code>t</code> da deixa (t = instante da tela). Funciona com qualquer pacote; prefira-a para movimento, impacto, dados e notificações.</li>
     <li>Biblioteca externa CC0 (<code>sound: "&lt;pacote&gt;/&lt;som&gt;"</code>, ex.: <code>"cinematic/achievement"</code>, <code>"glass/notification"</code>): sons reais gravados, 12 pacotes de estilo × 78 sons. O catálogo completo vem no pedido quando os sons estão ativados; use um único pacote no vídeo inteiro.</li>
     <li>Um som por acontecimento visual relevante, alinhado ao instante exato do movimento; 3 a 10 por clipe costuma bastar.</li>
     <li>Proibido: <code>&lt;audio&gt;</code>, WebAudio, Tone.js ou arquivos de som — o editor não os captura no export.</li>

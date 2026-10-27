@@ -460,28 +460,27 @@ function _buildTextPreviewCard(tmpl) {
   card.dataset.tmplId = tmpl.id;
   card.title        = tmpl.name;
 
-  const res    = window.__appState?.project?.res || { w: 1080, h: 1920 };
-  const CARD_W = 120;
-  const CARD_H = Math.round(CARD_W * (res.h / res.w));
-  const scale  = CARD_W / res.w;
+  const res = window.__appState?.project?.res || { w: 1080, h: 1920 };
+  const dur = tmpl.defaults?.duration || 4;
+  // Quadro com o texto inteiro na tela (fim da entrada)
+  const posterAt = +(dur * 0.75).toFixed(2);
+  const html = window.__TextRegistry.buildHtml(tmpl.id, tmpl.defaults, res);
 
+  // Pôster no formato do projeto, com limites (vertical não vira uma tira)
   const previewWrap = document.createElement('div');
   previewWrap.className = 'text-preview-wrap';
-  Object.assign(previewWrap.style, {
-    width: CARD_W + 'px', height: CARD_H + 'px',
-    position: 'relative', overflow: 'hidden', flexShrink: '0',
-  });
+  previewWrap.style.aspectRatio = String(Math.min(16 / 9, Math.max(3 / 4, res.w / res.h)));
 
-  const iframe = document.createElement('iframe');
-  iframe.sandbox = 'allow-scripts allow-same-origin';
-  iframe.style.cssText = `position:absolute;border:none;pointer-events:none;top:0;left:0;width:${res.w}px;height:${res.h}px;transform-origin:top left;transform:scale(${scale})`;
-  previewWrap.appendChild(iframe);
+  const poster = document.createElement('img');
+  poster.className = 'txt-poster';
+  poster.alt = '';
+  previewWrap.appendChild(poster);
 
   const info = document.createElement('div');
   info.className = 'text-preview-info';
   info.innerHTML = `
     <span class="text-preview-name">${tmpl.name}</span>
-    <button class="text-preview-add" title="Adicionar à timeline">
+    <button class="text-preview-add" title="Adicionar no playhead">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
       </svg>
@@ -490,38 +489,68 @@ function _buildTextPreviewCard(tmpl) {
   card.appendChild(previewWrap);
   card.appendChild(info);
 
-  let _raf = null, _clock = 0, _playing = false, _loaded = false;
-
-  function _loadPreview() {
-    iframe.srcdoc = window.__TextRegistry.buildHtml(tmpl.id, tmpl.defaults, res);
+  // iframe do documento inteiro, encaixado (contain) no tamanho atual do card
+  function makeFrame() {
+    const W = previewWrap.clientWidth || 100;
+    const H = previewWrap.clientHeight || 100;
+    const scale = Math.min(W / res.w, H / res.h);
+    const iframe = document.createElement('iframe');
+    iframe.sandbox = 'allow-scripts allow-same-origin';
+    iframe.tabIndex = -1;
+    iframe.style.cssText =
+      `position:absolute;border:none;pointer-events:none;` +
+      `left:${Math.round((W - res.w * scale) / 2)}px;top:${Math.round((H - res.h * scale) / 2)}px;` +
+      `width:${res.w}px;height:${res.h}px;transform-origin:top left;transform:scale(${scale})`;
+    iframe.srcdoc = html;
+    previewWrap.appendChild(iframe);
+    return iframe;
   }
 
-  iframe.addEventListener('load', () => {
-    _loaded = true;
-    try { iframe.contentWindow?.Motion?.seek(0); } catch(_) {}
-  });
+  const cachedUrl = window.MSPosters?.cached(html, res, posterAt);
+  if (cachedUrl) {
+    poster.src = cachedUrl;
+  } else {
+    previewWrap.classList.add('is-loading');
+    window.MSPosters.get(html, res, posterAt).then(
+      url => { poster.src = url; previewWrap.classList.remove('is-loading'); },
+      // Sem Chromium no servidor: quadro parado num iframe, como antes
+      () => {
+        previewWrap.classList.remove('is-loading');
+        const still = makeFrame();
+        still.addEventListener('load', () => {
+          try { still.contentWindow?.Motion?.seek(posterAt); } catch (_) {}
+        });
+      },
+    );
+  }
+
+  // Animação só no card sob o mouse: um iframe criado na hora e descartado ao sair
+  let live = null;
+  let raf = null;
 
   card.addEventListener('mouseenter', () => {
-    if (!_loaded) return;
-    _clock = 0; _playing = true;
-    let last = null;
-    const dur = tmpl.defaults?.duration || 4;
-    function tick(ts) {
-      if (!_playing) return;
-      if (last != null) _clock += (ts - last) / 1000;
-      last = ts;
-      if (_clock > dur) _clock = 0;
-      try { iframe.contentWindow?.Motion?.seek(_clock); } catch(_) {}
-      _raf = requestAnimationFrame(tick);
-    }
-    _raf = requestAnimationFrame(tick);
+    live = makeFrame();
+    live.addEventListener('load', () => {
+      if (!live) return;
+      previewWrap.classList.add('is-live');
+      let last = null;
+      let clock = 0;
+      const tick = ts => {
+        if (!live) return;
+        if (last != null) clock = (clock + (ts - last) / 1000) % (dur + 0.6);
+        last = ts;
+        try { live.contentWindow?.Motion?.seek(Math.min(clock, dur)); } catch (_) {}
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+    }, { once: true });
   });
 
   card.addEventListener('mouseleave', () => {
-    _playing = false;
-    cancelAnimationFrame(_raf);
-    _clock = 0;
-    try { iframe.contentWindow?.Motion?.seek(0); } catch(_) {}
+    cancelAnimationFrame(raf);
+    live?.remove();
+    live = null;
+    previewWrap.classList.remove('is-live');
   });
 
   info.querySelector('.text-preview-add').addEventListener('click', e => {
@@ -534,13 +563,18 @@ function _buildTextPreviewCard(tmpl) {
   card.addEventListener('dragstart', e => {
     e.dataTransfer.setData('text/x-mstudio-tmpl', tmpl.id);
     e.dataTransfer.effectAllowed = 'copy';
+    // A sombra na timeline precisa da duração (getData não funciona no dragover)
+    window.MSLibrary?.setTextDrag({ kind: 'text', duration: dur });
   });
 
-  _loadPreview();
   return card;
 }
 
-function addTextClipFromTemplate(tmpl) {
+/**
+ * Clip de texto novo. Padrão: no playhead, numa track acima de tudo que já
+ * aparece nesse trecho (texto fica por cima do vídeo). opts: { at, trackIndex, undo }
+ */
+function addTextClipFromTemplate(tmpl, opts = {}) {
   if (!state.project) return;
 
   if (typeof tmpl === 'string') {
@@ -553,9 +587,17 @@ function addTextClipFromTemplate(tmpl) {
   const html   = window.__TextRegistry.buildHtml(tmpl.id, params, res);
   const dur    = params.duration || 4;
 
-  const insertAt = state.clips.length
-    ? Math.max(...state.clips.map(c => c.start + c.duration))
-    : state.time;
+  const insertAt = Math.max(0, Number(opts.at ?? state.time) || 0);
+
+  const overlapping = state.clips.filter(c =>
+    c.start < insertAt + dur && insertAt < c.start + c.duration
+  );
+  const above = overlapping.length
+    ? Math.max(...overlapping.map(c => Number(c.trackIndex) || 0)) + 1
+    : 0;
+  const trackIndex = opts.trackIndex ?? window.__findFreeTrack?.(insertAt, insertAt + dur, above) ?? above;
+
+  if (opts.undo !== false) window.__tlPushUndo?.();
 
   const templateId = mkId();
   const clipId     = mkId();
@@ -580,13 +622,14 @@ function addTextClipFromTemplate(tmpl) {
     duration:   dur,
     trimStart:  0,
     trimEnd:    dur,
-    trackIndex: 0,
+    trackIndex,
     color:      SCENE_COLORS[state.clips.length % SCENE_COLORS.length],
     _tx:        { x: 0, y: 0, w: res.w, h: res.h, r: 0 },
     isText:     true,
   });
 
   state.clips.push(newClip);
+  window.getTrack?.(trackIndex);
 
   recalcProjectDuration?.();
   syncProjectGlobals?.();
@@ -956,21 +999,6 @@ window.__patchTextTrim = function(clipId, side, startX) {
 
   return false; // deixa o startTrim original rodar normalmente
 };
-
-document.getElementById('tlTracks')?.addEventListener('dragover', e => {
-  if (e.dataTransfer.types.includes('text/x-mstudio-tmpl')) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-  }
-});
-
-document.getElementById('tlTracks')?.addEventListener('drop', e => {
-  const id = e.dataTransfer.getData('text/x-mstudio-tmpl');
-  if (!id) return;
-  e.preventDefault();
-  const tmpl = window.__TextRegistry.getById(id);
-  if (tmpl) addTextClipFromTemplate(tmpl);
-});
 
 window.__TextRegistry
   .loadAll('text-templates/index.json')

@@ -19,6 +19,9 @@ const path = require('path');
 const vm   = require('vm');
 const { parsePatchBlocks, looksLikePatch, applyPatchBlocks, maskDataUris, unmaskDataUris } = require('./html-patch');
 const sfxLibrary = require('./sfx-library');
+const sfxOpenverse = require('./sfx-openverse');
+const { SPEC: CURVE_SPEC } = require('./curve-spec');
+const { SPEC: CAMERA_SPEC, EASES: CAMERA_EASES, normalizeCamera } = require('./camera-spec');
 
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 const MODELS_TTL_MS    = 10 * 60 * 1000;
@@ -168,7 +171,11 @@ function classifyError(code, msg = '', status = '', details = [], headers = null
     return new AiError('Modelo não encontrado na API do Gemini. Escolha outro modelo nas configurações da IA.', 404, 'model_not_found');
   }
   if (code >= 500) {
-    const err = new AiError('O Gemini está instável ou sobrecarregado no momento. Tente novamente em instantes.', 502, 'overloaded');
+    const timeout = code === 504 || /deadline/.test(raw);
+    const err = new AiError(timeout
+      ? 'O Gemini demorou demais para responder (timeout).'
+      : 'O Gemini está instável ou sobrecarregado no momento. Tente novamente em instantes.', 502, timeout ? 'timeout' : 'overloaded');
+    err.upstream = { status: code, name: status, message: String(msg).replace(/\s+/g, ' ').slice(0, 160) };
     Object.assign(err, parseRetryInfo(details, headers));
     return err;
   }
@@ -178,6 +185,13 @@ function classifyError(code, msg = '', status = '', details = [], headers = null
 function networkError(err) {
   if (err?.name === 'AbortError') return new AiError('Requisição cancelada.', 499, 'aborted');
   if (err instanceof AiError) return err;
+  // Gemini não respondeu (cabeçalho/corpo parado, conexão derrubada): é instabilidade dele, não da internet
+  const netCode = String(err?.cause?.code || err?.code || '');
+  if (/UND_ERR_(HEADERS|BODY|CONNECT)_TIMEOUT|^ETIMEDOUT$|^ECONNRESET$|UND_ERR_SOCKET|^EPIPE$/.test(netCode) || /^terminated$/i.test(String(err?.message))) {
+    const e = new AiError(`O Gemini não respondeu a tempo (${netCode || 'conexão encerrada'}).`, 502, 'timeout');
+    e.upstream = { status: 0, name: netCode, message: '' };
+    return e;
+  }
   // Só falha do fetch é "sem conexão"; o resto (arquivo, bug) aparece como é
   const isFetchFailure = err?.cause || /fetch failed|network|socket|ECONN|ENOTFOUND|ETIMEDOUT/i.test(String(err?.message));
   if (!isFetchFailure) {
@@ -268,7 +282,11 @@ function pickDefaultModel(models) {
 // existir (404), ele entra em "espera" e a geração continua no próximo modelo.
 // A espera usa o RetryInfo do Gemini; cota diária → horas; sem info → 60 s.
 
-const ROTATABLE = new Set(['quota', 'overloaded', 'model_not_found']);
+const ROTATABLE = new Set(['quota', 'overloaded', 'timeout', 'model_not_found']);
+const HEADERS_TIMEOUT_MS = 150e3;               // Gemini sem iniciar a resposta (o padrão do Node é 300 s)
+const IDLE_TIMEOUT_MS    = 150e3;               // resposta parada no meio (modelos pensando ficam quietos um tempo)
+const RETRY_SAME_DELAY_MS = [2500, 6000];       // sobrecarga passageira (503): nova tentativa no MESMO modelo antes de trocar
+const MAX_PARALLEL_AI    = 2;                   // chamadas simultâneas ao Gemini (cenas + sons + limpeza não se empilham)
 const ROTATE_DELAYS_MS  = [1500, 3000, 5000];   // pausa antes do próximo modelo (cresce a cada troca seguida)
 const MAX_QUOTA_WAIT_MS = 2 * 60e3;             // espera máxima por uma janela de cota (limites por minuto)
 const MAX_TOTAL_WAIT_MS = 6 * 60e3;             // soma das esperas num mesmo pedido
@@ -293,17 +311,24 @@ function cooldownOf(apiKey, model) {
   return c;
 }
 
+const failStreaks = new Map(); // cooldownId → falhas seguidas de sobrecarga/timeout (espera cresce: 20 s, 40 s, 80 s… até 5 min)
+
 function coolDown(apiKey, model, err) {
   // Cota diária: o RetryInfo às vezes vem em segundos, mas só volta no outro dia
   if (err.code === 'quota' && err.scope === 'day') {
     cooldowns.set(cooldownId(apiKey, model), { until: Date.now() + Math.max(err.retryAfterMs || 0, 6 * 3600e3), code: err.code });
     return;
   }
+  let streak = 0;
+  if (err.code === 'overloaded' || err.code === 'timeout') {
+    streak = failStreaks.get(cooldownId(apiKey, model)) || 0;
+    failStreaks.set(cooldownId(apiKey, model), streak + 1);
+  }
   const ms = err.retryAfterMs
     || (err.code === 'model_not_found' ? 24 * 3600e3
       : err.code === 'quota' && err.scope === 'day' ? 6 * 3600e3
       : err.code === 'quota' ? 60e3
-      : 20e3);
+      : Math.min(20e3 * 2 ** streak, 5 * 60e3));
   cooldowns.set(cooldownId(apiKey, model), { until: Date.now() + ms, code: err.code });
 }
 
@@ -338,6 +363,7 @@ function waitText(ms) {
 function rotationReason(err) {
   return err.code === 'quota' ? (err.scope === 'day' ? 'cota diária esgotada' : 'cota/limite atingido')
     : err.code === 'overloaded' ? 'sobrecarregado'
+    : err.code === 'timeout' ? 'sem resposta'
     : 'indisponível';
 }
 // #endregion
@@ -438,7 +464,7 @@ function buildSystemInstruction({ spec, w, h, fps, mode = 'create' }) {
     '- WebGL pode não existir no navegador do usuário (sem aceleração por hardware): crie o renderer dentro de try/catch e, se falhar, mantenha o clipe funcionando (renderer = null; seek pula o render 3D e continua animando textos/2D). Um erro no renderer nunca pode impedir que window.Motion seja definido.',
     '- Os tokens literais do validador (window.Motion, Motion.config, seek, renderFrame, whenReady, durationInSeconds, fps, totalFrames) devem aparecer no código.',
     '- Inclua <title> com um nome curto e descritivo do clipe (2 a 5 palavras, em português).',
-    '- Capriche no design: tipografia forte, easing suave, entrada e saída animadas, composição equilibrada para a resolução.',
+    '- Nível de motion designer sênior: composição em camadas com profundidade, movimento secundário contínuo, tipografia cinética, grafismos feitos no código (SVG/canvas), easing de qualidade e entrada/saída coreografadas. Um título parado sobre fundo liso NÃO é aceitável.',
     mode === 'edit'
       ? PATCH_FORMAT
       : '- Responda SOMENTE com o documento HTML completo, começando em <!DOCTYPE html> e terminando em </html>. Sem explicações, sem markdown, sem cercas de código.',
@@ -455,13 +481,15 @@ function buildSystemInstruction({ spec, w, h, fps, mode = 'create' }) {
 const SFX_TYPES = 'whoosh (passagem de ar), swipe (deslize curto), riser (subida de tensão; termina na revelação), impact (batida grave), bass (sub 808), pop (elemento surgindo), click (interface), tick (contador), typing (digitação; dur = tempo digitando), ding (sino/acerto), chime (brilho), success (conquista), notification (mensagem), coin (dinheiro/preço), glitch (ruído digital)';
 
 /** Como escrever deixas de som: sintetizados (type) + biblioteca externa (sound) */
-function sfxVocabulary(catalog) {
+function sfxVocabulary(catalog, { search = false } = {}) {
   return [
     `Sons sintetizados — use type: ${SFX_TYPES}.`,
     catalog
-      ? `${catalog}\nCombine: sintetizados para movimento e impacto (whoosh, riser, impact, bass), biblioteca para ações e significados (notification, success, purchase, typing…), sempre do MESMO pacote.`
+      ? `${catalog}\nPrefira "sfxkit" quando houver o som; sintetizados (type) e os pacotes de estilo do uisfx completam. Num mesmo vídeo use no máximo UM pacote do uisfx.`
       : '',
-    'Cada deixa tem type OU sound. gain 0.2–1 (padrão 0.8), pitch 0.5–2 (1 = normal), pan -1 (esquerda) a 1 (direita), dur em segundos (opcional).',
+    search
+      ? 'Cada deixa tem type, sound OU search (busca no Openverse, CC; só quando nenhuma biblioteca serve — com type de reserva). gain 0.2–1 (padrão 0.8), pitch 0.5–2 (1 = normal), pan -1 (esquerda) a 1 (direita), dur em segundos (opcional; limita o som), want = duração desejada de uma busca.'
+      : 'Cada deixa tem type OU sound. gain 0.2–1 (padrão 0.8), pitch 0.5–2 (1 = normal), pan -1 (esquerda) a 1 (direita), dur em segundos (opcional).',
   ].filter(Boolean).join('\n');
 }
 
@@ -503,6 +531,73 @@ function buildUserPrompt({ mode, prompt, html, name, w, h, fps, playhead, sfx = 
     'Pedido:',
     prompt,
   ].filter(x => x !== null).join('\n');
+}
+// #endregion
+
+// #region Itens da biblioteca (efeito / transição / texto do usuário)
+const ASSET_RULES = {
+  effect: [
+    'TIPO: EFEITO DE SOBREPOSIÇÃO. O editor coloca este clipe numa track ACIMA de um vídeo/cena e o estica para a duração inteira desse clipe (o tempo é remapeado: a animação precisa funcionar comprimida ou esticada).',
+    '- Fundo TRANSPARENTE obrigatório (html, body e qualquer container de tela cheia). O conteúdo de baixo tem que continuar visível: nada de cobrir o quadro com cor opaca.',
+    '- Exemplos do que é um efeito: light leak, grão/película, poeira e arranhões, partículas, bokeh, chuva/neve, vinheta animada, glitch, flare, brilho percorrendo, moldura animada, VHS/scanlines. Use opacidade, gradientes e mix-blend-mode (screen, overlay, soft-light) para integrar com o vídeo de baixo.',
+    '- Evolução contínua do início ao fim (nada que acabe na metade); sem texto, a não ser que seja pedido.',
+    '- Duração padrão 4 s.',
+  ],
+  transition: [
+    'TIPO: TRANSIÇÃO DE SOBREPOSIÇÃO. O editor coloca este clipe numa track ACIMA de dois clipes, CENTRADO no corte entre eles: o corte acontece exatamente em t = durationInSeconds / 2.',
+    '- Início e fim TOTALMENTE transparentes (o vídeo de baixo aparece normal).',
+    '- No meio (em volta de t = duração/2) o overlay COBRE O QUADRO INTEIRO, opaco, para esconder o corte; depois revela o quadro de novo.',
+    '- Exemplos: wipe com formas geométricas, cortina de cores, zoom/flash de luz, tinta/manchas, shapes em diagonal, glitch, círculo que fecha e abre, faixas deslizando.',
+    '- Movimento rápido e com energia (easing expo/back). Duração padrão 1 s (entre 0,6 e 1,5 s). Sem texto, a não ser que seja pedido.',
+  ],
+  text: [
+    'TIPO: TEMPLATE DE TEXTO do Motion Studio, seguindo EXATAMENTE a especificação acima (text-templates/ia-base.html): é o HTML-fonte com placeholders {{campo}} que o editor substitui.',
+    '- Use os placeholders {{text}}, {{fontFamily}}, {{fontSize}}, {{fontWeight}}, {{color}}, {{align}}, {{bg}}, {{duration}}, {{w}} e {{h}} (opcional {{highlightColor}}). durationInSeconds deve ser {{duration}}.',
+    '- {{text}} pode ter várias linhas (white-space: pre-wrap). Fundo transparente via {{bg}}.',
+    '- Entrada e saída animadas, design marcante; sem bibliotecas nem scripts externos (fontes do Google Fonts por <link> são ok).',
+  ],
+};
+
+/** body.asset → { kind, images: [{ mimeType, data }], html } */
+function normalizeAsset(raw) {
+  if (!raw || !ASSET_RULES[raw.kind]) return null;
+  const refs = raw.references || {};
+  return {
+    kind: raw.kind,
+    images: (Array.isArray(refs.images) ? refs.images : []).slice(0, 4)
+      .map(u => /^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(String(u || '')))
+      .filter(Boolean)
+      .map(m => ({ mimeType: m[1], data: m[2] })),
+    html: typeof refs.html === 'string' ? maskDataUris(refs.html).masked.slice(0, 60000) : '',
+  };
+}
+
+function buildAssetPrompt({ asset, prompt, w, h, fps }) {
+  return [
+    ...ASSET_RULES[asset.kind],
+    `Projeto: ${w}×${h} px, ${fps} fps.`,
+    asset.images.length ? `Imagens de referência anexadas (${asset.images.length}): use como referência visual de estilo, cores, formas e movimento — não copie literalmente nem embuta as imagens.` : '',
+    asset.html ? `HTML de referência (inspire-se no visual/técnica; o resultado precisa seguir as regras acima):\n${asset.html}` : '',
+    '',
+    'Pedido:',
+    prompt || '(sem descrição: crie a partir das referências)',
+  ].filter(Boolean).join('\n');
+}
+
+const textSpecCache = { mtime: 0, text: '' };
+/** Base oficial dos templates de texto (as regras estão no próprio HTML) */
+function loadTextSpec(root) {
+  const file = path.join(root, 'text-templates', 'ia-base.html');
+  try {
+    const stat = fs.statSync(file);
+    if (textSpecCache.mtime !== stat.mtimeMs) {
+      textSpecCache.text = fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n');
+      textSpecCache.mtime = stat.mtimeMs;
+    }
+    return textSpecCache.text;
+  } catch (_) {
+    return '';
+  }
 }
 // #endregion
 
@@ -561,6 +656,22 @@ function validateClip(html) {
   if (/esm\.sh|skypack\.dev/i.test(src))        warnings.push('CDN esm.sh/skypack (imports absolutos quebram; use jsdelivr/unpkg)');
 
   return { fatal, warnings, issues: [...fatal, ...warnings] };
+}
+
+/**
+ * Template de texto (text-templates/, ia-base.html): contrato mais leve que o
+ * dos clips — window.Motion com seek(t); a duração vem de {{duration}}.
+ */
+function validateTextTemplate(html) {
+  const src = String(html || '');
+  const fatal = [];
+  if (!src.includes('window.Motion')) fatal.push('window.Motion não encontrado');
+  if (!/\bseek\b/.test(src)) fatal.push('seek ausente');
+  if (!src.includes('{{text}}')) fatal.push('placeholder {{text}} ausente');
+  if (!/<html[\s>]/i.test(src)) fatal.push('documento sem <html>');
+  else if (!/<\/html>\s*$/i.test(src)) fatal.push('documento incompleto (sem </html> no final — resposta truncada?)');
+  const base = validateClip(src);
+  return { fatal, warnings: base.warnings, issues: [...fatal, ...base.warnings] };
 }
 
 /**
@@ -710,8 +821,28 @@ async function streamGemini({ apiKey, model, systemText, contents, maxOutputToke
   const generationConfig = { temperature: 0.7, ...config };
   if (maxOutputTokens) generationConfig.maxOutputTokens = maxOutputTokens;
 
+  // Cancelamento do usuário + relógio: sem resposta em HEADERS_TIMEOUT_MS (ou parada no meio
+  // por IDLE_TIMEOUT_MS) vira erro 'timeout' recuperável, em vez de esperar os 300 s do Node
+  const ctl = new AbortController();
+  let timedOut = false;
+  let timer = null;
+  const onUserAbort = () => ctl.abort();
+  if (signal?.aborted) ctl.abort(); else signal?.addEventListener('abort', onUserAbort, { once: true });
+  const arm = ms => { clearTimeout(timer); timer = setTimeout(() => { timedOut = true; ctl.abort(); }, ms); };
+  const fail = err => {
+    if (timedOut && !signal?.aborted) {
+      const e = new AiError(`O Gemini não respondeu em ${Math.round((text ? IDLE_TIMEOUT_MS : HEADERS_TIMEOUT_MS) / 1000)} s.`, 502, 'timeout');
+      e.upstream = { status: 0, name: 'TIMEOUT', message: '' };
+      return e;
+    }
+    return networkError(err);
+  };
+  const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', onUserAbort); };
+
+  let text = '';
   let resp;
   try {
+    arm(HEADERS_TIMEOUT_MS);
     resp = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
@@ -720,14 +851,17 @@ async function streamGemini({ apiKey, model, systemText, contents, maxOutputToke
         contents,
         generationConfig,
       }),
-      signal,
+      signal: ctl.signal,
     });
   } catch (err) {
-    throw networkError(err);
+    cleanup();
+    throw fail(err);
   }
-  if (!resp.ok) throw await upstreamError(resp);
+  if (!resp.ok) {
+    try { throw await upstreamError(resp); } finally { cleanup(); }
+  }
+  arm(IDLE_TIMEOUT_MS);
 
-  let text = '';
   let finishReason = '';
   let blockReason = '';
   let usage = null;
@@ -754,6 +888,7 @@ async function streamGemini({ apiKey, model, systemText, contents, maxOutputToke
 
   try {
     for await (const chunk of resp.body) {
+      arm(IDLE_TIMEOUT_MS);
       buf += decoder.decode(chunk, { stream: true });
       let idx;
       // Eventos SSE separados por linha em branco
@@ -772,7 +907,9 @@ async function streamGemini({ apiKey, model, systemText, contents, maxOutputToke
       handleEvent(buf.split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('\n'));
     }
   } catch (err) {
-    throw networkError(err);
+    throw fail(err);
+  } finally {
+    cleanup();
   }
 
   if (blockReason) {
@@ -813,17 +950,46 @@ function openNdjson(res) {
  * ordem: cota/sobrecarga/404 → cooldown + próximo. `startAt` mantém as rodadas
  * de correção no modelo que funcionou. runner.model/rotated/usage acumulam.
  */
-async function createRunner({ store, send, signal }) {
+let aiActive = 0;
+const aiWaiting = [];
+
+/** Vaga numa das MAX_PARALLEL_AI chamadas simultâneas; devolve a função que libera */
+async function acquireAiSlot(signal, send) {
+  if (aiActive >= MAX_PARALLEL_AI) {
+    send({ type: 'status', message: 'Aguardando outra tarefa de IA terminar…' });
+    await new Promise((resolve, reject) => {
+      const entry = { resolve };
+      aiWaiting.push(entry);
+      signal?.addEventListener('abort', () => {
+        const i = aiWaiting.indexOf(entry);
+        if (i >= 0) { aiWaiting.splice(i, 1); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }
+      }, { once: true });
+    });
+  } else {
+    aiActive++;
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = aiWaiting.shift();
+    if (next) next.resolve(); else aiActive--;   // a vaga passa direto para quem espera
+  };
+}
+
+async function createRunner({ store, send, signal, model: forcedModel }) {
   const cfg = store.get();
   if (!cfg.apiKey) throw new AiError(NO_KEY_MESSAGE, 400, 'no_key');
+  // Modelo escolhido na hora (tela de recuperação): só ele, sem rotação
+  const forced = /^[\w.\-\/]{1,120}$/.test(String(forcedModel || '')) ? String(forcedModel).replace(/^models\//, '') : '';
 
   let models = [];
   try { models = await fetchModels(cfg.apiKey, { signal }); } catch (err) {
     if (err?.code === 'invalid_key' || err?.code === 'aborted') throw err;
     // Lista indisponível: segue com o modelo configurado/padrão
   }
-  const primary = cfg.model || pickDefaultModel(models) || 'gemini-2.5-flash';
-  const order = cfg.autoRotate ? rotationOrder(primary, models) : [primary];
+  const primary = forced || cfg.model || pickDefaultModel(models) || 'gemini-2.5-flash';
+  const order = forced ? [forced] : cfg.autoRotate ? rotationOrder(primary, models) : [primary];
   const maxTokensFor = id => {
     const info = models.find(m => m.id === id);
     return info?.outputTokenLimit ? Math.min(info.outputTokenLimit, 65536) : undefined;
@@ -849,8 +1015,18 @@ async function createRunner({ store, send, signal }) {
    * reabrir e tenta de novo, começando pelo modelo que libera primeiro.
    */
   runner.run = async ({ systemText, contents, verb = 'Gerando', startAt = order[0], config }) => {
+    const release = await acquireAiSlot(signal, send);
+    try {
+      return await runRotating({ systemText, contents, verb, startAt, config });
+    } finally {
+      release();
+    }
+  };
+
+  async function runRotating({ systemText, contents, verb, startAt, config }) {
     let waited = 0;
     let switches = 0;
+    const attempts = forced ? RETRY_SAME_DELAY_MS.length + 1 : 2;
     for (;;) {
       const queue = [startAt, ...order.filter(id => id !== startAt)];
       let earliest = Infinity;
@@ -862,30 +1038,46 @@ async function createRunner({ store, send, signal }) {
 
       for (const candidate of queue) {
         if (cooldownOf(cfg.apiKey, candidate)) { noteCooldown(candidate); continue; }
-        try {
-          send({ type: 'status', message: `${verb} com ${candidate}…`, model: candidate });
-          lastProgress = 0;
-          const out = await streamGemini({
-            apiKey: cfg.apiKey, model: candidate, systemText, contents, config,
-            maxOutputTokens: maxTokensFor(candidate), signal, onText,
-          });
-          runner.model = candidate;
-          runner.usage.input  += Number(out.usage?.promptTokenCount) || 0;
-          runner.usage.output += (Number(out.usage?.candidatesTokenCount) || 0) + (Number(out.usage?.thoughtsTokenCount) || 0);
-          runner.usage.rounds += 1;
-          return out;
-        } catch (err) {
-          const e = networkError(err);
-          if (!ROTATABLE.has(e.code)) throw e;
-          coolDown(cfg.apiKey, candidate, e);
-          noteCooldown(candidate);
-          runner.rotated.push({ model: candidate, reason: rotationReason(e) });
-          const next = queue.slice(queue.indexOf(candidate) + 1).find(id => !cooldownOf(cfg.apiKey, id));
-          console.warn(`[AI] ${candidate}: ${rotationReason(e)}${next ? ` — próximo: ${next}` : ''}`);
-          if (!next) break;
-          const delay = ROTATE_DELAYS_MS[Math.min(switches++, ROTATE_DELAYS_MS.length - 1)];
-          send({ type: 'status', message: `${candidate}: ${rotationReason(e)} — tentando ${next} em ${Math.round(delay / 1000)}s…`, rotatedFrom: candidate });
-          await sleepAbortable(delay, signal);
+        for (let attempt = 1; ; attempt++) {
+          try {
+            send({ type: 'status', message: `${verb} com ${candidate}…`, model: candidate });
+            lastProgress = 0;
+            const out = await streamGemini({
+              apiKey: cfg.apiKey, model: candidate, systemText, contents, config,
+              maxOutputTokens: maxTokensFor(candidate), signal, onText,
+            });
+            runner.model = candidate;
+            failStreaks.delete(cooldownId(cfg.apiKey, candidate));
+            runner.usage.input  += Number(out.usage?.promptTokenCount) || 0;
+            runner.usage.output += (Number(out.usage?.candidatesTokenCount) || 0) + (Number(out.usage?.thoughtsTokenCount) || 0);
+            runner.usage.rounds += 1;
+            return out;
+          } catch (err) {
+            const e = networkError(err);
+            if (!ROTATABLE.has(e.code)) throw e;
+            const detail = e.upstream ? ` [${[e.upstream.status || '', e.upstream.name, e.upstream.message].filter(Boolean).join(' ')}]` : '';
+            const why = `${rotationReason(e)}${detail}`;
+            // Sobrecarga passageira (503): quase sempre passa em segundos — tenta o mesmo modelo de novo
+            // antes de trocar (trocar entre modelos da mesma família só espalha a carga)
+            if (e.code === 'overloaded' && attempt < attempts) {
+              const delay = (RETRY_SAME_DELAY_MS[attempt - 1] || 6000) + Math.random() * 1500;
+              console.warn(`[AI] ${candidate}: ${why} — nova tentativa em ${Math.round(delay / 1000)}s`);
+              send({ type: 'status', message: `${candidate}: ${rotationReason(e)} — nova tentativa em ${Math.round(delay / 1000)}s…`, retrying: candidate });
+              await sleepAbortable(delay, signal);
+              continue;
+            }
+            coolDown(cfg.apiKey, candidate, e);
+            noteCooldown(candidate);
+            runner.rotated.push({ model: candidate, reason: rotationReason(e) });
+            const next = queue.slice(queue.indexOf(candidate) + 1).find(id => !cooldownOf(cfg.apiKey, id));
+            console.warn(`[AI] ${candidate}: ${why}${next ? ` — próximo: ${next}` : ''}`);
+            if (next) {
+              const delay = ROTATE_DELAYS_MS[Math.min(switches++, ROTATE_DELAYS_MS.length - 1)];
+              send({ type: 'status', message: `${candidate}: ${rotationReason(e)} — tentando ${next} em ${Math.round(delay / 1000)}s…`, rotatedFrom: candidate });
+              await sleepAbortable(delay, signal);
+            }
+            break;
+          }
         }
       }
 
@@ -896,7 +1088,7 @@ async function createRunner({ store, send, signal }) {
         const end = Date.now() + total;
         while (Date.now() < end) {
           const left = Math.ceil((end - Date.now()) / 1000);
-          send({ type: 'status', message: `Limite de uso atingido em todos os modelos — nova tentativa em ${left}s…`, waiting: left });
+          send({ type: 'status', message: `${forced || 'Todos os modelos'} indisponível — nova tentativa em ${left}s…`, waiting: left });
           await sleepAbortable(Math.min(1000, end - Date.now()), signal);
         }
         waited += total;
@@ -905,12 +1097,16 @@ async function createRunner({ store, send, signal }) {
       }
 
       const waitMsg = Number.isFinite(earliest) ? ` Tente de novo em ~${waitText(earliest - Date.now())}.` : '';
-      throw new AiError(
-        `Todos os modelos disponíveis estão sem cota ou sobrecarregados (${order.join(', ')}).${waitMsg}`,
+      const err = new AiError(
+        forced
+          ? `O modelo ${forced} está sem cota ou sobrecarregado.${waitMsg} Escolha outro modelo ou tente de novo depois.`
+          : `Todos os modelos disponíveis estão sem cota ou sobrecarregados (${order.join(', ')}).${waitMsg}`,
         429, 'all_models_exhausted'
       );
+      err.retryAfterMs = Number.isFinite(earliest) ? Math.max(0, earliest - Date.now()) : 0;
+      throw err;
     }
-  };
+  }
 
   return runner;
 }
@@ -977,7 +1173,8 @@ const PLAN_SYSTEM = [
   'Você é diretor de arte e roteirista de motion graphics. Recebe a transcrição de um áudio (com o tempo de cada fala) e planeja um vídeo em cenas que acompanham a narração.',
   'Responda SOMENTE com JSON no formato pedido.',
   '- style: UM estilo visual para o vídeo inteiro. Cores em hexadecimal #rrggbb com bom contraste (text sobre background legível). fontHeading e fontBody: nomes EXATOS de famílias do Google Fonts. motion: linguagem de movimento (easing, ritmo, tipo de transição de entrada/saída) que TODAS as cenas repetem. motifs: elementos gráficos recorrentes (formas, texturas, ícones, grafismos) que dão identidade.',
-  '- scenes: em ordem, cobrindo o áudio de 0 até a duração total, sem buracos e sem sobreposição (end de uma = start da próxima). Corte nas pausas entre falas, nunca no meio de uma frase. title: 2 a 5 palavras. visual: o que a cena mostra (composição, elementos, animação), ilustrando o que está sendo dito. onScreenText: texto curto que aparece na tela (pode ser vazio).',
+  '- scenes: em ordem, cobrindo o áudio de 0 até a duração total, sem buracos e sem sobreposição (end de uma = start da próxima). Corte nas pausas entre falas, nunca no meio de uma frase. title: 2 a 5 palavras. onScreenText: texto curto que aparece na tela (pode ser vazio).',
+  '- visual: roteiro visual DETALHADO da cena (3 a 5 frases), como um storyboard de motion design: o fundo e a atmosfera; o elemento principal que ilustra a fala (gráfico/contador para números, ícone ou ilustração vetorial para conceitos, mockup de interface para produto/tecnologia, linha do tempo ou cards para etapas, split screen para comparações); os grafismos de apoio; o tratamento da tipografia; e 2 a 4 momentos de animação amarrados às falas ("quando ele diz X, Y acontece"). Nada de "título centralizado com fundo" — cada cena precisa de uma ideia visual própria.',
   '- As cenas formam UM vídeo coerente: mesma paleta, tipografia e linguagem de movimento; varie a composição entre cenas para não ficar repetitivo.',
 ].join('\n');
 
@@ -988,7 +1185,10 @@ const SFX_SYSTEM = [
   '- Um som por acontecimento visual relevante; nada de trilha contínua nem sons a cada frame. Tipicamente 3 a 10 por clipe; deixe respiro.',
   '- Entrada de elemento = whoosh/swipe/pop; revelação ou logo = impact (riser antes, terminando no impacto); preço/dinheiro = coin ou commerce/*; mensagem = notification; digitação = typing com dur.',
   '- Com narração ou legendas no mesmo trecho, mantenha gain ≤ 0.45 e evite sons longos por cima das falas.',
-  '- Coerência: escolha UM pacote da biblioteca para todos os clipes (combine com o estilo visual) e use-o em todo sound.',
+  '- Qualidade: prefira a biblioteca "sfxkit" (sons com ponto de sincronia e níveis calibrados) para movimento, impacto, interface, dados e notificações; escolha a intensidade pelo tom do vídeo (soft/subtle com narração ou corporativo, hard em edição enérgica) e a duração pelo movimento (fast/medium/slow).',
+  '- Diversidade: não repita o mesmo som em sequência; alterne variações (ex.: pop-small-in, pop-medium-in) e varie gain/pitch levemente (0.9–1.1) nos repetidos.',
+  '- Sons que nenhuma biblioteca tem (porta, multidão, motor, animais, objetos do mundo real…): use search com 1 a 4 palavras EM INGLÊS (ex.: "door slam", "camera shutter") e want = duração desejada em segundos; sempre inclua também type como reserva caso a busca falhe. No máximo 6 buscas no total.',
+  '- Coerência: se usar os pacotes de estilo do uisfx, escolha UM para todos os clipes; sfxkit e buscas são neutros e combinam com qualquer pacote.',
   '- Responda SOMENTE com JSON no formato pedido. t sempre no relógio indicado para cada clipe.',
 ].join('\n');
 
@@ -1008,6 +1208,7 @@ const SFX_SCHEMA = {
               type: 'OBJECT',
               properties: {
                 t: { type: 'NUMBER' }, type: { type: 'STRING' }, sound: { type: 'STRING' },
+                search: { type: 'STRING' }, want: { type: 'NUMBER' },
                 gain: { type: 'NUMBER' }, pitch: { type: 'NUMBER' }, dur: { type: 'NUMBER' }, pan: { type: 'NUMBER' },
               },
               required: ['t'],
@@ -1021,10 +1222,161 @@ const SFX_SCHEMA = {
   required: ['clips'],
 };
 
+// #region Curvas de animação (easing) com IA
+const CURVE_SYSTEM = [
+  'Você cria curvas de animação (easing) para o editor de vídeo Motion Studio a partir de uma descrição em linguagem natural.',
+  'Traduza o movimento descrito (ex.: "rebote suave", "começa devagar e dispara", "mola que oscila 3 vezes") na curva que melhor o reproduz.',
+  'Use kind "bezier" (campo p com 4 números) sempre que uma bezier der conta; use kind "points" (campo points, 12 a 60 pontos {x,y}) para quicar, elástico, mola e degraus.',
+  'Responda SOMENTE com JSON no formato pedido. A especificação completa:',
+  CURVE_SPEC,
+].join('\n');
+
+const CURVE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    name:   { type: 'STRING' },
+    kind:   { type: 'STRING', enum: ['bezier', 'points'] },
+    p:      { type: 'ARRAY', items: { type: 'NUMBER' } },
+    points: { type: 'ARRAY', items: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' } }, required: ['x', 'y'] } },
+  },
+  required: ['name', 'kind'],
+};
+
+/** Resposta da IA → { name, curve } válidos (mesmas regras do editor: clip-fx.js normalizeCurve) */
+function curveFromAi(out) {
+  if (!globalThis.ClipFX) require('../Interface/clip-fx.js');
+  const F = globalThis.ClipFX;
+  const name = String(out?.name || 'Minha curva').replace(/\s+/g, ' ').trim().slice(0, 40) || 'Minha curva';
+  let curve = null;
+  if (out?.kind === 'points' || (!out?.p && Array.isArray(out?.points))) {
+    let pts = (Array.isArray(out.points) ? out.points : []).map(q => [Number(q?.x), Number(q?.y)]);
+    if (pts.length) {
+      pts.sort((a, b) => a[0] - b[0]);
+      if (pts[0][0] > 0.001) pts.unshift([0, 0]);
+      if (pts[pts.length - 1][0] < 0.999) pts.push([1, 1]);
+    }
+    curve = F.normalizeCurve({ pts });
+  } else {
+    curve = F.normalizeCurve({ p: out?.p });
+  }
+  return curve ? { name, curve } : null;
+}
+// #endregion
+
+// #region Câmera 2D com IA (movimentos a partir da fala e da posição dos elementos)
+const CAMERA_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    summary: { type: 'STRING' },
+    keyframes: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          t:        { type: 'NUMBER' },
+          focus:    { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' } }, required: ['x', 'y'] },
+          zoom:     { type: 'NUMBER' },
+          rotation: { type: 'NUMBER' },
+          ease:     { type: 'STRING', enum: CAMERA_EASES },
+          reason:   { type: 'STRING' },
+        },
+        required: ['t', 'focus', 'zoom'],
+      },
+    },
+  },
+  required: ['keyframes'],
+};
+
+const CAMERA_STYLE_TEXT = {
+  intensity: {
+    subtle:   'Intensidade SUTIL: poucos movimentos, zoom até ~1,5, curvas suaves.',
+    balanced: 'Intensidade EQUILIBRADA: movimentos claros nos momentos importantes, zoom até ~2,2.',
+    dynamic:  'Intensidade DINÂMICA: movimentos mais ousados e rápidos, zoom até ~3, pode usar "ease-out" e "overshoot".',
+  },
+  margin: {
+    loose: 'Enquadramento FOLGADO (margem m ≈ 1,8): o elemento aparece com bastante ar em volta.',
+    tight: 'Enquadramento JUSTO (margem m ≈ 1,25): o elemento ocupa quase toda a visão.',
+  },
+};
+
+// #endregion
+
+// #region Limpeza de narração (cortes automáticos com IA)
+const CLEANUP_SYSTEM = [
+  'Você é editor de áudio de narrações, podcasts e vídeos falados. Recebe a transcrição de uma gravação palavra a palavra, cada palavra com um número (índice), e marcações de pausa.',
+  'Sua tarefa: apontar os trechos que um editor profissional cortaria para a fala ficar limpa, fluida e sem erros — sem mudar o sentido nem reescrever nada.',
+  'Corte (quando pedido):',
+  '- hesitacao: sons de hesitação e muletas vazias ("éé", "ahn", "hum", "tipo", "né" e "então" quando não acrescentam nada), gaguejos e palavras cortadas pela metade.',
+  '- repeticao: palavras ou frases repetidas sem querer e TOMADAS REPETIDAS — quando a pessoa erra e fala a mesma frase de novo, mantenha só a última versão completa e corte as anteriores inteiras.',
+  '- erro: frases começadas e abandonadas, autocorreções ("dia cinco, quer dizer, dia seis" → fica "dia seis"), informação dita errada e corrigida logo depois.',
+  '- fora: comentários fora do conteúdo ("pera, vou de novo", "corta isso", "deixa eu ver", conversa com outra pessoa, testes de microfone).',
+  'Regras:',
+  '- Cada corte é uma faixa contínua de índices (from..to, inclusive). Nunca corte uma palavra pela metade de uma frase que fica.',
+  '- O que sobra precisa soar natural e gramatical quando as partes forem emendadas. Na dúvida, NÃO corte.',
+  '- Não corte conteúdo real só para encurtar. Não invente palavras.',
+  '- reason: frase curta em português explicando o corte (ex.: "tomada repetida", "muleta").',
+  '- Responda SOMENTE com JSON no formato pedido.',
+].join('\n');
+
+const CLEANUP_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    cuts: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          from: { type: 'INTEGER' }, to: { type: 'INTEGER' },
+          kind: { type: 'STRING', enum: ['hesitacao', 'repeticao', 'erro', 'fora'] },
+          reason: { type: 'STRING' },
+        },
+        required: ['from', 'to', 'kind'],
+      },
+    },
+    summary: { type: 'STRING' },
+  },
+  required: ['cuts'],
+};
+
+const CLEANUP_KINDS = {
+  hesitacao: 'hesitações, muletas e gaguejos',
+  repeticao: 'repetições e tomadas repetidas (mantenha a última boa)',
+  erro: 'frases abandonadas, autocorreções e erros corrigidos',
+  fora: 'comentários fora do conteúdo',
+};
+
+/** Transcrição numerada: uma linha por frase/pausa, "[12.3s] 0:Olá 1:pessoal …" */
+function buildCleanupPrompt({ words, kinds, prompt, language }) {
+  const lines = [];
+  let line = [];
+  words.forEach((w, i) => {
+    const gap = i ? w.s - words[i - 1].e : 0;
+    if (line.length && (gap > 0.6 || line.length >= 30)) {
+      lines.push(line.join(' '));
+      line = [];
+    }
+    if (!line.length) line.push(`${gap > 0.6 ? `(pausa ${gap.toFixed(1)}s) ` : ''}[${w.s.toFixed(1)}s]`);
+    line.push(`${i}:${w.w}`);
+  });
+  if (line.length) lines.push(line.join(' '));
+  return [
+    `Idioma: ${language || 'detectar'}. Total: ${words.length} palavras.`,
+    `Corte SOMENTE estes tipos: ${kinds.map(k => `${k} (${CLEANUP_KINDS[k]})`).join('; ')}.`,
+    prompt ? `Instruções do usuário: ${String(prompt).slice(0, 600)}` : '',
+    'Silêncios longos já são removidos pelo editor — não precisa apontá-los.',
+    '',
+    'TRANSCRIÇÃO:',
+    ...lines,
+    '',
+    'Responda com { cuts: [{ from, to, kind, reason }], summary }.',
+  ].filter(x => x !== '').join('\n');
+}
+// #endregion
+
 function buildSfxPrompt({ clips, context, pack, prompt, catalog }) {
   const ctx = context || {};
   const lines = [
-    sfxVocabulary(catalog),
+    sfxVocabulary(catalog, { search: true }),
     pack ? `Pacote já escolhido para este vídeo (mantenha): ${pack}.` : '',
     prompt ? `Pedido do usuário: ${String(prompt).slice(0, 500)}` : '',
     '',
@@ -1051,6 +1403,34 @@ function buildSfxPrompt({ clips, context, pack, prompt, catalog }) {
   });
   lines.push('', 'Responda com { pack, clips: [{ id, cues: [...] }] } cobrindo todos os ids.');
   return lines.filter(x => x !== '').join('\n');
+}
+
+/**
+ * Deixas com search ("door slam") → sound "ov/<id>" de um resultado do Openverse
+ * (baixado para o cache local). Sem resultado: fica o type de reserva, ou a deixa sai.
+ * → { 'ov/<id>': { url, duration, title, creator, license, attribution, source } }
+ */
+async function resolveSearchCues(clips, send) {
+  const wanted = clips.flatMap(c => c.cues).filter(c => c && typeof c.search === 'string' && c.search.trim());
+  if (!wanted.length) return {};
+  send({ type: 'status', message: 'Buscando sons no Openverse…' });
+  const found = await sfxOpenverse.resolve(wanted.map(c => ({ search: c.search, want: c.want ?? c.dur })), { max: 6 });
+  const external = {};
+  for (const clip of clips) {
+    clip.cues = clip.cues.flatMap(cue => {
+      if (!cue || typeof cue.search !== 'string' || !cue.search.trim()) return [cue];
+      const { search, want, ...rest } = cue;
+      const hit = found.get(search.trim().toLowerCase());
+      if (hit) {
+        const { id, ...info } = hit;
+        external[id] = info;
+        const dur = Number(rest.dur) > 0 ? Math.min(Number(rest.dur), hit.duration) : 0;
+        return [{ ...rest, type: undefined, sound: id, dur }];
+      }
+      return rest.type ? [rest] : [];   // sem resultado: o som sintetizado de reserva
+    });
+  }
+  return external;
 }
 
 function fmtSec(t) {
@@ -1300,12 +1680,26 @@ function buildScenePrompt({ scene, prompt, fps, sfx = false, sfxCatalog = '' }) 
       : '(sem fala nesta cena)',
     `Encadeamento: ${prev ? `vem depois de "${prev.title}"` : 'é a abertura do vídeo'}; ${next ? `antes de "${next.title}"` : 'é o encerramento'}. A saída desta cena e a entrada da próxima usam a mesma linguagem de movimento.`,
     'Não escreva a fala inteira na tela (legendas são feitas à parte): destaque só palavras-chave, números e ideias.',
+    SCENE_CRAFT,
     sfx ? sfxRules('create', sfxCatalog) : '',
     scene.total > 1 ? ANCHOR_RULES : '',
     prompt ? `Pedido adicional: ${prompt}` : '',
     `Inclua <title>${scene.title}</title>.`,
   ].filter(Boolean).join('\n');
 }
+
+// Padrão de acabamento de TODAS as cenas (a 1ª e as editadas a partir dela)
+const SCENE_CRAFT = [
+  'PADRÃO DE QUALIDADE (motion design profissional — cena simples é inaceitável):',
+  '- Camadas: (1) fundo vivo — gradientes da paleta, grão/textura sutil, formas ou partículas se movendo devagar, profundidade; (2) grafismos de apoio — linhas, molduras, formas geométricas, ícones SVG desenhados no código, rótulos, números, barras; (3) tipografia principal em destaque.',
+  '- Nada estático: além das entradas, mantenha movimento secundário contínuo a cena inteira (deriva lenta de câmera/zoom de 2–5%, flutuação, rotação lenta, brilho percorrendo, partículas). Nenhum elemento parado por muito tempo.',
+  '- Tipografia cinética: revele títulos por palavra ou letra (máscara/clip-path, deslize com blur, escala com overshoot) com stagger; hierarquia clara (palavra-chave enorme, apoio pequeno), pesos variados.',
+  '- Ritmo: um acontecimento visual a cada frase ou palavra-chave da fala (novo elemento, troca de destaque, número contando, ícone desenhando o traço com stroke-dashoffset).',
+  '- Técnica certa para o conteúdo: números → contador animado e/ou gráfico (barras, linhas, anéis de progresso); etapas → cards ou linha do tempo que se constrói; conceitos → ícone/ilustração SVG; comparação → split screen; produto/tecnologia → mockup de interface.',
+  '- Acabamento: sombras suaves, glow nos acentos, desfoque nas camadas de trás, blend modes, bordas finas, espaçamento consistente; easing expo/back (elastic com moderação); entradas escalonadas e saída coreografada no fim (não só fade).',
+  '- Mínimo por cena: 3 camadas, 8 ou mais elementos animados em tempos diferentes e ao menos 1 grafismo SVG ou canvas feito no código.',
+  '- Evite: título centralizado sozinho sobre fundo liso, bullets simples, emojis como ícones, texto demais, elementos que entram e ficam parados.',
+].join('\n');
 
 // A âncora vira o ponto de partida das próximas: código organizado = blocos menores
 const ANCHOR_RULES = [
@@ -1334,7 +1728,7 @@ function buildSceneContinuePrompt({ scene, previousHtml, prompt, fps, sfx = fals
     `===== CENA ${scene.index + 1} DE ${scene.total}: "${scene.title}" =====`,
     'Crie esta cena EDITANDO o HTML de referência com blocos SEARCH/REPLACE (formato nas instruções):',
     '- Mantenha IDÊNTICOS o <head> (link das fontes e :root com as variáveis --ms-*), o CSS base, os helpers e o contrato window.Motion: são a identidade do vídeo.',
-    '- Troque o que é da cena: o DOM, o CSS específico e a timeline em seek(t). A composição é NOVA (não repita o layout da referência); paleta, fontes, grafismos e linguagem de movimento continuam os mesmos.',
+    '- Troque o que é da cena: o DOM, o CSS específico e a timeline em seek(t). Reescreva esses blocos POR COMPLETO (um REPLACE grande é esperado aqui) — editar pouco e deixar a cena mais pobre que a referência é um erro. A composição é NOVA (não repita o layout da referência); paleta, fontes, grafismos e linguagem de movimento continuam os mesmos, e o nível de detalhe é pelo menos o da referência.',
     `- Continuidade: esta cena começa onde a referência termina (t = ${fmtSec(prev.duration)} s nela). Veja o que sai, o que fica na tela e como está o fundo, e faça o quadro t = 0 desta cena partir desse estado — o corte entre os clipes deve parecer uma transição única, sem salto de fundo nem de elementos.`,
     `- Duração EXATA: ${D} s → no config, durationInSeconds: ${D} e totalFrames: ${Math.round(D * fps)} (fps ${fps}).`,
     `- Troque o <title> por <title>${scene.title}</title>.`,
@@ -1349,6 +1743,7 @@ function buildSceneContinuePrompt({ scene, previousHtml, prompt, fps, sfx = fals
       ? `Depois desta vem "${next.title}": termine com a saída na linguagem de movimento do vídeo.`
       : 'É o encerramento do vídeo: feche com um final claro.',
     'Não escreva a fala inteira na tela (legendas são feitas à parte): destaque só palavras-chave, números e ideias.',
+    SCENE_CRAFT,
     sfx ? `${sfxRules('edit', sfxCatalog)}\nReescreva Motion.sfx para ESTA cena (os sons da referência não valem aqui).` : '',
     prompt ? `Pedido adicional: ${prompt}` : '',
   ].filter(Boolean).join('\n');
@@ -1444,9 +1839,12 @@ function register(app, { root } = {}) {
     const reqName = cleanName(body.name);
     // Cena de um vídeo gerado a partir de áudio (duração fixa + guia de estilo)
     const scene = mode === 'create' ? normalizeSceneRequest(body.scene) : null;
+    // Efeito / transição / texto para a biblioteca do usuário (custom-assets.js)
+    const asset = mode === 'create' && !scene ? normalizeAsset(body.asset) : null;
+    const validate = asset?.kind === 'text' ? validateTextTemplate : validateClip;
     const sfx = body.sfx === true;
 
-    if (!prompt && !scene) return res.status(400).json({ error: 'Escreva o que você quer no clipe.' });
+    if (!prompt && !scene && !(asset && (asset.images.length || asset.html))) return res.status(400).json({ error: 'Escreva o que você quer no clipe.' });
     if (mode === 'edit' && !currentHtml.trim()) {
       return res.status(400).json({ error: 'HTML do clipe atual não informado para edição.' });
     }
@@ -1455,7 +1853,7 @@ function register(app, { root } = {}) {
 
     try {
       send({ type: 'status', message: 'Preparando…' });
-      const runner = await createRunner({ store, send, signal });
+      const runner = await createRunner({ store, send, signal, model: req.body?.model });
       const verb = mode === 'edit' ? 'Editando' : 'Gerando';
       const generate = (startAt = runner.order[0]) => runner.run({ systemText, contents, verb, startAt });
 
@@ -1465,14 +1863,17 @@ function register(app, { root } = {}) {
       const { masked: maskedHtml, store: dataStore } = maskDataUris(chained ? scene.previous.html : currentHtml);
       const patchMode = mode === 'edit' || chained;
 
-      const systemText = buildSystemInstruction({ spec: chained ? '' : loadSpec(root), w, h, fps, mode: patchMode ? 'edit' : 'create' });
+      const spec = chained ? '' : asset?.kind === 'text' ? loadTextSpec(root) : loadSpec(root);
+      const systemText = buildSystemInstruction({ spec, w, h, fps, mode: patchMode ? 'edit' : 'create' });
       const sfxCatalog = sfx ? await sfxLibrary.promptText() : '';
       const userText = chained
         ? buildSceneContinuePrompt({ scene, previousHtml: maskedHtml, prompt, fps, sfx, sfxCatalog })
         : scene
           ? buildScenePrompt({ scene, prompt, fps, sfx, sfxCatalog })
-          : buildUserPrompt({ mode, prompt, html: maskedHtml, name: reqName, w, h, fps, playhead, sfx, sfxCatalog });
-      const contents = [{ role: 'user', parts: [{ text: userText }] }];
+          : asset
+            ? buildAssetPrompt({ asset, prompt, w, h, fps })
+            : buildUserPrompt({ mode, prompt, html: maskedHtml, name: reqName, w, h, fps, playhead, sfx, sfxCatalog });
+      const contents = [{ role: 'user', parts: [{ text: userText }, ...(asset?.images || []).map(img => ({ inlineData: img }))] }];
 
       let result = await generate();
       let html;
@@ -1489,7 +1890,7 @@ function register(app, { root } = {}) {
       } else {
         html = autoFix(extractHtml(result.text));
         if (scene) html = fixSceneDuration(html, scene.duration, fps);
-        check = validateClip(html);
+        check = validate(html);
       }
 
       if (!patchMode && check.issues.length) {
@@ -1512,7 +1913,7 @@ function register(app, { root } = {}) {
         result = await generate(runner.model);
         let fixedHtml = autoFix(extractHtml(result.text));
         if (scene) fixedHtml = fixSceneDuration(fixedHtml, scene.duration, fps);
-        const fixedCheck = validateClip(fixedHtml);
+        const fixedCheck = validate(fixedHtml);
         // Usa a versão corrigida se não piorou
         if (fixedCheck.fatal.length <= check.fatal.length) { html = fixedHtml; check = fixedCheck; }
       }
@@ -1572,7 +1973,7 @@ function register(app, { root } = {}) {
     const { send, finish, signal } = openNdjson(res);
     try {
       send({ type: 'status', message: 'Preparando…' });
-      const runner = await createRunner({ store, send, signal });
+      const runner = await createRunner({ store, send, signal, model: req.body?.model });
       const catalog = await sfxLibrary.promptText();
       const parts = [{ text: buildSfxPrompt({ clips, context: body.context || {}, pack: body.pack, prompt: body.prompt, catalog }) }];
       // Quadros dos vídeos/imagens, na ordem citada no texto
@@ -1588,12 +1989,15 @@ function register(app, { root } = {}) {
       if (!out || !Array.isArray(out.clips)) throw new AiError('A IA não devolveu efeitos sonoros válidos. Tente novamente.', 502, 'invalid_sfx');
 
       const ids = new Set(clips.map(c => c.id));
+      const outClips = out.clips
+        .filter(c => ids.has(String(c.id)))
+        .map(c => ({ id: String(c.id), cues: (Array.isArray(c.cues) ? c.cues : []).slice(0, 60) }));
+      const external = await resolveSearchCues(outClips, send);
       finish({
         type: 'done',
         pack: String(out.pack || body.pack || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40) || null,
-        clips: out.clips
-          .filter(c => ids.has(String(c.id)))
-          .map(c => ({ id: String(c.id), cues: (Array.isArray(c.cues) ? c.cues : []).slice(0, 60) })),
+        clips: outClips,
+        external,
         model: runner.model,
         rotated: runner.rotated,
         usage: runner.usage,
@@ -1601,6 +2005,140 @@ function register(app, { root } = {}) {
     } catch (err) {
       const e = networkError(err);
       if (e.code !== 'aborted') console.warn('[AI] Efeitos sonoros falharam:', e.message);
+      finish({ type: 'error', error: e.message, code: e.code });
+    }
+  });
+
+  /**
+   * POST /api/ai/camera → NDJSON (status/done/error)
+   * { context, instruction?, style?: { intensity, margin }, images?: [{ t, dataUrl }], model? }
+   * context = { frame, camera: { duration }, speech, elements, samples } (ver libs/camera-spec.js)
+   * done: { summary, keyframes: [{ t, x, y, zoom, rotation, ease, reason, camX, camY, camZoom, camR }] }
+   */
+  app.post('/api/ai/camera', async (req, res) => {
+    const body = req.body || {};
+    const ctx = body.context && typeof body.context === 'object' ? body.context : null;
+    if (!ctx || !ctx.frame || !ctx.camera || !Number(ctx.camera.duration)) {
+      return res.status(400).json({ error: 'Faltam os dados da cena (quadro, duração da câmera e elementos).' });
+    }
+    const ctxText = JSON.stringify(ctx);
+    if (ctxText.length > 400_000) return res.status(413).json({ error: 'Os dados da cena são grandes demais. Reduza o trecho da câmera.' });
+    const instruction = String(body.instruction || '').trim().slice(0, 1500);
+    const style = body.style || {};
+    const images = (Array.isArray(body.images) ? body.images : []).slice(0, 6).map(img => {
+      const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(img?.dataUrl || ''));
+      return m && m[2].length < 2_500_000 ? { t: Number(img.t) || 0, mimeType: m[1], data: m[2] } : null;
+    }).filter(Boolean);
+
+    const { send, finish, signal } = openNdjson(res);
+    try {
+      send({ type: 'status', message: 'Preparando…' });
+      const runner = await createRunner({ store, send, signal, model: body.model });
+      const text = [
+        'DADOS DO PROJETO (JSON):',
+        ctxText,
+        '',
+        CAMERA_STYLE_TEXT.intensity[style.intensity] || CAMERA_STYLE_TEXT.intensity.balanced,
+        CAMERA_STYLE_TEXT.margin[style.margin] || CAMERA_STYLE_TEXT.margin.loose,
+        images.length ? 'Anexei quadros reais da cena (com o instante de cada um) para você ver o que são os elementos.' : '',
+        instruction ? `PEDIDO DO USUÁRIO: ${instruction}` : '',
+        'Responda somente com o JSON dos keyframes.',
+      ].filter(Boolean).join('\n');
+      const parts = [{ text }];
+      images.forEach(img => {
+        parts.push({ text: `[Quadro da cena em t = ${img.t.toFixed(2)} s]` });
+        parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
+      });
+      const result = await runner.run({
+        systemText: CAMERA_SPEC,
+        contents: [{ role: 'user', parts }],
+        verb: 'Planejando a câmera',
+        config: { responseMimeType: 'application/json', responseSchema: CAMERA_SCHEMA, temperature: 0.5 },
+      });
+      const made = normalizeCamera(parseJsonLoose(result.text), { duration: ctx.camera.duration, frame: ctx.frame });
+      if (!made) throw new AiError('A IA não devolveu keyframes de câmera válidos. Tente de novo ou descreva melhor o que destacar.', 502, 'invalid_camera');
+      finish({ type: 'done', ...made, model: runner.model, rotated: runner.rotated, usage: runner.usage });
+    } catch (err) {
+      const e = networkError(err);
+      if (e.code !== 'aborted') console.warn('[AI] Câmera falhou:', e.message);
+      finish({ type: 'error', error: e.message, code: e.code });
+    }
+  });
+
+  /**
+   * POST /api/ai/curve → NDJSON (status/done/error)
+   * { prompt, current?: { p } | { pts }, model? }   done: { name, curve: { p } | { pts } }
+   */
+  app.post('/api/ai/curve', async (req, res) => {
+    const body = req.body || {};
+    const prompt = String(body.prompt || '').trim().slice(0, 1500);
+    if (!prompt) return res.status(400).json({ error: 'Descreva a curva que você quer.' });
+    const { send, finish, signal } = openNdjson(res);
+    try {
+      send({ type: 'status', message: 'Preparando…' });
+      const runner = await createRunner({ store, send, signal, model: body.model });
+      const current = body.current && typeof body.current === 'object' ? JSON.stringify(body.current).slice(0, 4000) : '';
+      const userText = [
+        `Descrição do movimento: ${prompt}`,
+        current ? `Curva atual (ajuste a partir dela se a descrição pedir uma mudança): ${current}` : '',
+      ].filter(Boolean).join('\n');
+      const result = await runner.run({
+        systemText: CURVE_SYSTEM,
+        contents: [{ role: 'user', parts: [{ text: userText }] }],
+        verb: 'Criando a curva',
+        config: { responseMimeType: 'application/json', responseSchema: CURVE_SCHEMA, temperature: 0.4 },
+      });
+      const made = curveFromAi(parseJsonLoose(result.text));
+      if (!made) throw new AiError('A IA não devolveu uma curva válida. Tente descrever de outro jeito.', 502, 'invalid_curve');
+      finish({ type: 'done', ...made, model: runner.model, rotated: runner.rotated, usage: runner.usage });
+    } catch (err) {
+      const e = networkError(err);
+      if (e.code !== 'aborted') console.warn('[AI] Curva falhou:', e.message);
+      finish({ type: 'error', error: e.message, code: e.code });
+    }
+  });
+
+  /**
+   * POST /api/ai/audio/cleanup → NDJSON (status/done/error)
+   * { words: [{ w, s, e }], kinds: ['hesitacao'|'repeticao'|'erro'|'fora'], prompt?, language? }
+   * done: { cuts: [{ from, to, kind, reason }], summary }  (índices das palavras)
+   */
+  app.post('/api/ai/audio/cleanup', async (req, res) => {
+    const body = req.body || {};
+    const words = (Array.isArray(body.words) ? body.words : []).slice(0, 12000).map(w => ({
+      w: String(w.w || '').replace(/\s+/g, ' ').trim().slice(0, 40),
+      s: Number(w.s) || 0,
+      e: Number(w.e) || 0,
+    }));
+    const kinds = (Array.isArray(body.kinds) ? body.kinds : []).filter(k => k in CLEANUP_KINDS);
+    if (!words.length) return res.status(400).json({ error: 'Nenhuma fala na transcrição.' });
+    if (!kinds.length) return res.status(400).json({ error: 'Escolha ao menos um tipo de corte.' });
+
+    const { send, finish, signal } = openNdjson(res);
+    try {
+      send({ type: 'status', message: 'Preparando…' });
+      const runner = await createRunner({ store, send, signal, model: req.body?.model });
+      const contents = [{ role: 'user', parts: [{ text: buildCleanupPrompt({ words, kinds, prompt: body.prompt, language: body.language }) }] }];
+      const config = { responseMimeType: 'application/json', responseSchema: CLEANUP_SCHEMA, temperature: 0.2 };
+      const result = await runner.run({ systemText: CLEANUP_SYSTEM, contents, verb: 'Analisando a fala', config });
+      const out = parseJsonLoose(result.text);
+      if (!out || !Array.isArray(out.cuts)) throw new AiError('A IA não devolveu cortes válidos. Tente novamente.', 502, 'invalid_cleanup');
+
+      const last = words.length - 1;
+      const cuts = out.cuts
+        .map(c => ({
+          from: Math.round(Number(c.from)), to: Math.round(Number(c.to)),
+          kind: kinds.includes(c.kind) ? c.kind : null,
+          reason: String(c.reason || '').slice(0, 80),
+        }))
+        .filter(c => c.kind && Number.isFinite(c.from) && Number.isFinite(c.to))
+        .map(c => ({ ...c, from: Math.max(0, Math.min(c.from, c.to)), to: Math.min(last, Math.max(c.from, c.to)) }))
+        .filter(c => c.from <= last && c.to - c.from < 400)
+        .sort((a, b) => a.from - b.from);
+      finish({ type: 'done', cuts, summary: String(out.summary || '').slice(0, 400), model: runner.model, usage: runner.usage });
+    } catch (err) {
+      const e = networkError(err);
+      if (e.code !== 'aborted') console.warn('[AI] Limpeza de áudio falhou:', e.message);
       finish({ type: 'error', error: e.message, code: e.code });
     }
   });
@@ -1636,7 +2174,7 @@ function register(app, { root } = {}) {
     const { send, finish, signal } = openNdjson(res);
     try {
       send({ type: 'status', message: 'Preparando…' });
-      const runner = await createRunner({ store, send, signal });
+      const runner = await createRunner({ store, send, signal, model: req.body?.model });
       const contents = [{ role: 'user', parts: [{ text: buildPlanPrompt(opts) }] }];
       const config = { responseMimeType: 'application/json', responseSchema: PLAN_SCHEMA, temperature: 0.8 };
 
@@ -1663,4 +2201,4 @@ function register(app, { root } = {}) {
 }
 // #endregion
 
-module.exports = { register, _internal: { extractHtml, validateClip, extractDurationSec, extractTitle, compareModels, pickDefaultModel, loadSpec, rotationOrder, classifyError, parseRetryInfo, normalizePlanScenes, normalizeSceneRequest, buildScenePrompt, buildSceneContinuePrompt, buildSystemInstruction, fixSceneDuration, parseJsonLoose } };
+module.exports = { register, _internal: { extractHtml, validateClip, validateTextTemplate, extractDurationSec, extractTitle, compareModels, pickDefaultModel, loadSpec, rotationOrder, classifyError, parseRetryInfo, normalizePlanScenes, normalizeSceneRequest, buildScenePrompt, buildSceneContinuePrompt, buildSystemInstruction, fixSceneDuration, parseJsonLoose, resolveSearchCues, buildSfxPrompt, createRunner, curveFromAi } };

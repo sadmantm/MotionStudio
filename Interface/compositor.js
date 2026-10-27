@@ -442,7 +442,7 @@ function applyClipTransformStyle(iframe, clip) {
     ? iframe.parentElement : null;
 
   if (!wrap) {
-    wrap = document.createElement('div');
+    wrap = iframe.ownerDocument.createElement('div');
     wrap.className = '__tx_wrap';
     iframe.parentElement?.insertBefore(wrap, iframe);
     wrap.appendChild(iframe);
@@ -458,7 +458,7 @@ function applyClipTransformStyle(iframe, clip) {
     transform-origin:center center;
     overflow:hidden;
     pointer-events:none;
-    z-index:${(clip.trackIndex ?? 0) + 1};
+    z-index:${((clip.trackIndex ?? 0) + 1) * 2};
   `;
 
   iframe.style.cssText = `
@@ -502,7 +502,7 @@ function _applyElementTransform(el, clip) {
     : null;
 
   if (!wrap) {
-    wrap = document.createElement('div');
+    wrap = el.ownerDocument.createElement('div');
     wrap.className = '__tx_wrap';
     el.parentElement?.insertBefore(wrap, el);
     wrap.appendChild(el);
@@ -518,7 +518,7 @@ function _applyElementTransform(el, clip) {
     transform-origin:center center;
     overflow:hidden;
     pointer-events:none;
-    z-index:${(clip.trackIndex ?? 0) + 1};
+    z-index:${((clip.trackIndex ?? 0) + 1) * 2};
   `;
 
   // O elemento nativo preenche o wrapper 100% — sem escala interna.
@@ -708,6 +708,8 @@ function reconcileCompositorWindow(
       }
     });
 
+  const tails = buildTailMap(state.clips);
+
   state.clips.forEach(clip => {
     const start =
       Number(clip.start) || 0;
@@ -719,7 +721,9 @@ function reconcileCompositorWindow(
         Number(
           clip.duration
         ) || 0.001
-      );
+      ) +
+      // Clip anterior de uma transição fica montado durante o "rabo"
+      (tails.get(clip.id)?.duration || 0);
 
     const shouldMount =
       clip.id === selectedId ||
@@ -933,10 +937,15 @@ const Compositor = (() => {
     return _wrapper;
   }
 
+  // Documento do palco: com o preview numa janela separada (preview-window.js)
+  // as mídias nascem lá — vídeo criado no editor e adotado não desenha o
+  // quadro parado até dar play
+  const stageDoc = () => wrapper()?.ownerDocument || document;
+
   function mount(clip, html) {
     unmount(clip.id);
 
-    const iframe = document.createElement('iframe');
+    const iframe = stageDoc().createElement('iframe');
     iframe.sandbox = 'allow-scripts allow-same-origin';
     iframe.style.border        = 'none';
     iframe.style.background    = 'transparent';
@@ -975,7 +984,7 @@ const Compositor = (() => {
   function mountVideo(clip, dataUrl, mimeType, audioOnly = false) {
     unmount(clip.id);
   
-    const video = document.createElement(audioOnly ? 'audio' : 'video');
+    const video = stageDoc().createElement(audioOnly ? 'audio' : 'video');
     video.src         = dataUrl;
     video.preload     = 'metadata';
     video.loop        = false;
@@ -985,8 +994,8 @@ const Compositor = (() => {
     video.dataset.clipId   = clip.id;
     video.dataset.clipType = audioOnly ? 'audio' : 'video';
   
+    wrapper()?.appendChild(video);        // anexa antes: o __tx_wrap entra no lugar dele
     _applyElementTransform(video, clip);
-    wrapper()?.appendChild(video);
   
     const entry = {
       iframe:            video,
@@ -1039,14 +1048,14 @@ const Compositor = (() => {
   function mountImage(clip, dataUrl) {
     unmount(clip.id);
 
-    const img = document.createElement('img');
+    const img = stageDoc().createElement('img');
     img.src           = dataUrl;
     img.style.cssText = 'position:absolute;display:none;object-fit:fill;';
     img.dataset.clipId   = clip.id;
     img.dataset.clipType = 'image';
 
-    _applyElementTransform(img, clip);
     wrapper()?.appendChild(img);
+    _applyElementTransform(img, clip);
 
     const entry = {
       iframe:      img,
@@ -1246,16 +1255,23 @@ function syncCompositorToTime(t) {
   const hiddenTracks  = new Set((state.tracks || []).filter(track => track.hidden).map(track => track.index));
   // No play, HTML anda no ritmo do preview (fps do projeto ou menos, se adaptativo)
   const playbackFps = state.playing ? previewPlaybackFps() : 0;
+  const tails = buildTailMap(state.clips);
+  // Câmeras 2D (camera.js): uma vez por quadro; "Ver sem câmera" as ignora só no preview
+  const cams = window.__cameraBypass ? [] : (window.ClipKF?.cameras?.() || []);
 
   state.clips.forEach(clip => {
     const tmpl = templatesById.get(clip.templateId);
 
     const hidden = hiddenTracks.has(clip.trackIndex ?? 0);
 
+    // Transição do próximo clip: este continua visível por baixo (congelado)
+    const tailFx = tails.get(clip.id) || null;
+    const inTail = Boolean(tailFx) && t >= clip.start + clip.duration;
+
     const inRange = Boolean(
       !hidden &&
       t >= clip.start &&
-      t < clip.start + clip.duration
+      t < clip.start + clip.duration + (tailFx ? tailFx.duration : 0)
     );
 
     const entry =
@@ -1281,7 +1297,10 @@ function syncCompositorToTime(t) {
         }
 
         entry._transformApplied = true;
+        entry._fxKey = null;   // cssText refeito: efeitos precisam ser reaplicados
       }
+
+      if (tmpl?.type !== 'audio') applyClipFx(entry, clip, t, tailFx, cams);
 
       /*
        * Aqui acontece o time stretch.
@@ -1303,12 +1322,18 @@ function syncCompositorToTime(t) {
         entry?.isNative &&
         entry.nativeType === 'video'
       ) {
-        const gain = window.__clipAudioGain ? window.__clipAudioGain(clip, t) : 1;
+        // Gravando voz com o projeto tocando: preview mudo (não vaza no microfone)
+        const gain = window.__previewMuted ? 0 : (window.__clipAudioGain ? window.__clipAudioGain(clip, t) : 1);
         if (Math.abs((entry.iframe.volume ?? 1) - gain) > 0.005) {
           entry.iframe.volume = clamp(gain, 0, 1);
         }
+        const rate = state.playing ? (window.__playRate || 1) : 1;
+        if (entry.iframe.playbackRate !== rate) entry.iframe.playbackRate = rate;
 
-        if (state.playing) {
+        if (state.playing && inTail) {
+          if (entry.isPlaying) Compositor.send(clip.id, { type: 'PAUSE' });
+          Compositor.send(clip.id, { type: 'SEEK', time: sourceTime });
+        } else if (state.playing) {
           if (!entry.isPlaying) {
             const currentTime =
               entry.iframe.currentTime ?? 0;
@@ -1389,16 +1414,114 @@ function syncCompositorToTime(t) {
         entry?.isNative &&
         entry.nativeType === 'video'
       ) {
-        Compositor.send(
-          clip.id,
-          { type: 'PAUSE' }
-        );
+        // Pré-roll: o clip seguinte (ex.: a outra metade de um corte) começa a tocar, mudo,
+        // um instante ANTES do ponto de corte. play() de um elemento parado leva dezenas de ms
+        // para sair som — era essa a pausa audível entre dois clips colados.
+        const lead = clip.start - t;
+        if (state.playing && !hidden && lead > 0 && lead <= AUDIO_PREROLL_S) {
+          prerollNativeMedia(entry, clip, t, tmpl);
+        } else {
+          entry._prerolling = false;
+          Compositor.send(
+            clip.id,
+            { type: 'PAUSE' }
+          );
+        }
       }
     }
   });
 }
 
+/** Segundos antes do começo de um clip de áudio/vídeo em que ele já toca (mudo) */
+const AUDIO_PREROLL_S = 0.3;
+
+function prerollNativeMedia(entry, clip, t, tmpl) {
+  // Posição da fonte no instante t (antes do início: trimStart menos o que falta, sem passar de 0)
+  const sourceTime = (Number(clip.trimStart) || 0) + (t - clip.start);
+  if (sourceTime < 0) {
+    // Clip que começa no 0 da mídia: não há "antes" para tocar; só começa na hora
+    Compositor.send(clip.id, { type: 'PAUSE' });
+    return;
+  }
+  entry._prerolling = true;
+  if (entry.iframe.volume !== 0) entry.iframe.volume = 0;
+  if (!entry.isPlaying) {
+    entry._prerollFixed = false;
+    Compositor.send(clip.id, { type: 'SEEK', time: sourceTime });
+    Compositor.send(clip.id, { type: 'PLAY' });
+  } else if (!entry._prerollFixed && !entry.isSeeking && clip.start - t <= 0.16) {
+    // O play() demora a engatar e o elemento anda atrasado (~0,1 s): um ajuste fino, ainda mudo,
+    // um pouco antes do corte para o som entrar exatamente no ponto
+    entry._prerollFixed = true;
+    if (Math.abs((entry.iframe.currentTime ?? 0) - sourceTime) > 0.02) entry.iframe.currentTime = sourceTime + 0.03;
+  }
+}
+
 window.__syncCompositorToTime = syncCompositorToTime;
+
+/**
+ * clipId → tailFx. Um clip com transição de entrada "entre clips" faz o clip
+ * anterior da mesma track (encostado nele) continuar visível por baixo
+ * durante a transição, congelado no último quadro. export.js usa a mesma regra.
+ */
+function buildTailMap(clips) {
+  const map = new Map();
+  if (!window.ClipFX) return map;
+  clips.forEach(clip => {
+    const transition = clip.fx?.transition;
+    if (!ClipFX.active(transition)) return;
+    const track = Number(clip.trackIndex) || 0;
+    const prev = clips.find(other => other !== clip &&
+      (Number(other.trackIndex) || 0) === track &&
+      Math.abs(other.start + other.duration - clip.start) < 0.05);
+    if (prev) {
+      map.set(prev.id, {
+        type: transition.type,
+        duration: Math.min(Number(transition.duration), clip.duration),
+      });
+    }
+  });
+  return map;
+}
+window.__buildTailMap = buildTailMap;
+
+/** Reaplica efeitos depois de a caixa do clip ser reescrita (arrastar no preview) */
+window.__reapplyClipFx = clipId => {
+  const clip = state.clips.find(c => c.id === clipId);
+  const entry = Compositor.get(clipId);
+  if (!clip || !entry) return;
+  entry._fxKey = null;
+  const cams = window.__cameraBypass ? [] : (window.ClipKF?.cameras?.() || []);
+  applyClipFx(entry, clip, state.time, buildTailMap(state.clips).get(clipId) || null, cams);
+};
+
+/** Efeitos/transições do clip no tempo t, aplicados na caixa (.__tx_wrap) */
+function applyClipFx(entry, clip, t, tailFx, cams = null) {
+  const wrap = entry?.iframe?.parentElement;
+  if (!wrap?.classList.contains('__tx_wrap') || !window.ClipFX) return;
+  const anim = window.ClipKF?.hasAnim(clip) ? window.ClipKF.styleInput(clip) : null;
+  // Câmera 2D, modo de mesclagem e camada de ajuste (keyframes.js: fxExtras)
+  const extras = window.ClipKF ? window.ClipKF.fxExtras(clip, cams) : {};
+  const fx = (clip.fx || tailFx || anim || extras.cams || extras.blend || extras.adj)
+    ? ClipFX.style({ start: clip.start, duration: clip.duration, fx: clip.fx, tailFx, ...(anim || {}), ...extras }, t)
+    : null;
+  const rotate = `rotate(${fx?.rotation != null ? fx.rotation : (Number(clip._tx?.r) || 0)}deg)`;
+  const transform = fx?.transform ? `${fx.transform} ${rotate}` : rotate;
+  const zIndex = ((clip.trackIndex ?? 0) + 1) * 2 + (fx?.front ? 1 : 0);
+  const opacity = fx ? fx.opacity : 1;
+  const key = `${opacity}|${fx?.filter || ''}|${transform}|${fx?.clipPath || ''}|${zIndex}|${fx?.blend || ''}|${fx?.backdropFilter || ''}`;
+  if (entry._fxKey === key) return;
+  entry._fxKey = key;
+  wrap.style.opacity   = opacity === 1 ? '' : String(opacity);
+  wrap.style.filter    = fx?.filter || '';
+  wrap.style.transform = transform;
+  wrap.style.clipPath  = fx?.clipPath || '';
+  wrap.style.zIndex    = String(zIndex);
+  wrap.style.mixBlendMode = fx?.blend || '';
+  // Camada de ajuste: o filtro vai no fundo (backdrop-filter), sobre o que está embaixo dela
+  wrap.style.backdropFilter = fx?.backdropFilter || '';
+  wrap.style.webkitBackdropFilter = fx?.backdropFilter || '';
+}
 // #endregion
 
 // #region Mensagens dos iframes → app
@@ -1498,6 +1621,16 @@ window.remountClip = function remountClip(clipId) {
 
 // #region Playback Engine
 let _rafId = null;
+let _rafHost = window;
+
+/**
+ * Janela que dirige o play: com o preview numa janela separada (outro
+ * monitor), os quadros vêm dela — o editor coberto/minimizado não trava o play.
+ */
+function playbackRafHost() {
+  const win = window.__previewWindow;
+  return win && !win.closed ? win : window;
+}
 let _lastTs = null;
 
 /**
@@ -1577,11 +1710,12 @@ function _pause() {
   const state = window.__appState;
   if (!state) return;
   state.playing = false;
+  window.__playRate = 1;
 
   document.getElementById('iconPlay').style.display  = '';
   document.getElementById('iconPause').style.display = 'none';
 
-  cancelAnimationFrame(_rafId);
+  try { _rafHost.cancelAnimationFrame(_rafId); } catch (_) { /* janela fechada */ }
   _lastTs = null;
 
   // Pausa todos os iframes
@@ -1592,12 +1726,13 @@ function _pause() {
 }
 
 function _scheduleTick() {
-  _rafId = requestAnimationFrame(ts => {
+  _rafHost = playbackRafHost();
+  _rafId = _rafHost.requestAnimationFrame(ts => {
     const state = window.__appState;
     if (!state?.playing) return;
 
     if (_lastTs != null) {
-      state.time += (ts - _lastTs) / 1000;
+      state.time += (ts - _lastTs) / 1000 * (window.__playRate || 1);
       trackPreviewPerformance(ts - _lastTs);
     }
     _lastTs = ts;
@@ -1643,7 +1778,7 @@ window.seekTo = function seekTo(t) {
   // Para o loop RAF atual para evitar que sobrescreva o novo tempo
   if (wasPlaying) {
     state.playing = false;
-    cancelAnimationFrame(_rafId);
+    try { _rafHost.cancelAnimationFrame(_rafId); } catch (_) { /* janela fechada */ }
     _lastTs = null;
     // PAUSE só afeta vídeos nativos de fato; para iframes é inofensivo
     Compositor.allIds().forEach(id => Compositor.send(id, { type: 'PAUSE' }));
@@ -1704,11 +1839,13 @@ function syncPreviewSize() {
   const topBar  = document.getElementById('previewTopBar');
   const infoBar = document.getElementById('previewInfo');
   const topH    = (topBar?.offsetHeight  || 32) + (infoBar?.offsetHeight || 24);
-  const maxH    = Math.max(80, previewCont.clientHeight - topH - 40);
-  const maxW    = Math.max(80, previewCont.clientWidth  - 40);
+  // Preview numa janela separada: encaixa no tamanho dela (sem o zoom do editor)
+  const host    = window.__previewHostSize?.();
+  const maxH    = host ? host.h : Math.max(80, previewCont.clientHeight - topH - 40);
+  const maxW    = host ? host.w : Math.max(80, previewCont.clientWidth  - 40);
 
   const fitScale = Math.min(maxH / res.h, maxW / res.w);
-  const s = Math.min(Math.max(fitScale * (state?.previewZoom ?? 1), 0.05), 4);
+  const s = Math.min(Math.max(fitScale * (host ? 1 : (state?.previewZoom ?? 1)), 0.05), 8);
 
   wrapper.style.width           = res.w + 'px';
   wrapper.style.height          = res.h + 'px';
@@ -1882,11 +2019,12 @@ window.deleteTrack = trackIndex => {
   const hasClips = state.clips.some(c => (Number(c.trackIndex) || 0) === trackIndex);
 
   if (hasClips) {
-    alert('Esta track possui clips. Mova ou exclua os clips antes de apagar a track.');
+    window.MSUI.notify('Esta track possui clips. Mova ou exclua os clips antes de apagar a track.');
     return;
   }
 
   state.tracks = state.tracks.filter(t => t.index !== trackIndex);
+  if (state.selectedTrack === trackIndex) state.selectedTrack = null;
 
   if (!state.tracks.length) {
     state.tracks.push(createTrack(0));
@@ -1923,6 +2061,39 @@ window.moveClipTrackDelta = (clipId, delta) => {
   const next = Math.max(0, (Number(clip.trackIndex) || 0) + Number(delta || 0));
   window.moveClipToTrack(clipId, next);
 };
+// #endregion
+
+// #region Seleção de track
+/**
+ * Track ativa (state.selectedTrack): clicar no nome da track, numa área
+ * vazia dela ou num clip dela. Cortar e apagar agem só nos clips dessa
+ * track quando não há clip selecionado — antes iam para a track de cima.
+ */
+function selectTrack(trackIndex) {
+  const next = trackIndex == null || !Number.isFinite(Number(trackIndex)) ? null : Number(trackIndex);
+  if (state.selectedTrack === next) return;
+  state.selectedTrack = next;
+  markSelectedTrack();
+  renderProjectSettings();   // painel da track (áudio/dB) à direita
+}
+window.selectTrack = selectTrack;
+
+function markSelectedTrack() {
+  tlLabels.querySelectorAll('.tl-label[data-track]').forEach(el => {
+    el.classList.toggle('tl-label-selected', Number(el.dataset.track) === state.selectedTrack);
+  });
+  tlTracks.querySelectorAll('.tl-row[data-track]').forEach(el => {
+    el.classList.toggle('tl-row-selected', Number(el.dataset.track) === state.selectedTrack);
+  });
+}
+
+/** Clip da track ativa sob o playhead (alvo de cortar/apagar sem clip selecionado) */
+function selectedTrackClipAt(time = state.time) {
+  if (state.selectedTrack == null) return null;
+  return state.clips.find(c =>
+    (Number(c.trackIndex) || 0) === state.selectedTrack &&
+    time >= c.start && time < c.start + c.duration) || null;
+}
 // #endregion
 
 // #region Timeline — Renderização
@@ -2063,6 +2234,8 @@ function renderTimeline() {
 
   tlPlayhead.style.height = (24 + effectiveTracks.length * rowH) + 'px';
   updatePlayhead(state.time);
+  markSelectedTrack();
+  window.__renderMarkers?.();
 }
 
 function buildClipBlock(clip, track, rowH, pxPerSec, selected) {
@@ -2087,6 +2260,10 @@ function buildClipBlock(clip, track, rowH, pxPerSec, selected) {
     clip.captionGroupId ? '<span class="tl-badge" title="Legenda">CC</span>' : '',
     clip.muted || (Number(clip.volume ?? 1) === 0) ? '<span class="tl-badge" title="Sem áudio">🔇</span>' : '',
     (clip.fadeIn > 0 || clip.fadeOut > 0) ? '<span class="tl-badge" title="Fade de áudio">◢◣</span>' : '',
+    window.ClipFX?.anyFx(clip.fx) ? '<span class="tl-badge tl-badge-fx" title="Efeitos aplicados">FX</span>' : '',
+    window.ClipKF?.has(clip) ? '<span class="tl-badge tl-badge-kf" title="Keyframes">◆</span>' : '',
+    window.ClipKF?.layerKind(clip) === 'camera' ? '<span class="tl-badge tl-badge-cam" title="Câmera 2D: move o que está abaixo">CAM</span>' : '',
+    window.ClipKF?.layerKind(clip) === 'adjustment' ? '<span class="tl-badge tl-badge-adj" title="Camada de ajuste: filtra tudo que está abaixo">AJ</span>' : '',
   ].join('');
 
   block.innerHTML = `
@@ -2099,8 +2276,10 @@ function buildClipBlock(clip, track, rowH, pxPerSec, selected) {
     <div class="tl-resize-handle tl-resize-right"></div>
   `;
 
-  // Miniaturas / forma de onda (timeline-pro.js)
+  // Miniaturas / forma de onda (timeline-pro.js) e marcas de transição (fx-panel.js)
   window.__decorateClipBlock?.(block, clip, tmpl, pxPerSec);
+  window.__decorateFxBlock?.(block, clip, pxPerSec);
+  window.__decorateKfBlock?.(block, clip, tmpl, pxPerSec);
   return block;
 }
 
@@ -2116,6 +2295,18 @@ function refreshClipBlock(clipId) {
   if (dur) dur.textContent = fmtTime(clip.duration);
   const tmpl = state.templates.find(t => t.id === clip.templateId);
   window.__decorateClipBlock?.(block, clip, tmpl, pxPerSec);
+  window.__decorateFxBlock?.(block, clip, pxPerSec);
+  window.__decorateKfBlock?.(block, clip, tmpl, pxPerSec);
+  // Selos FX e keyframes acompanham o que foi aplicado/removido
+  const label = block.querySelector('.tl-block-label');
+  [
+    ['tl-badge-fx', Boolean(window.ClipFX?.anyFx(clip.fx)), '<span class="tl-badge tl-badge-fx" title="Efeitos aplicados">FX</span>'],
+    ['tl-badge-kf', Boolean(window.ClipKF?.has(clip)), '<span class="tl-badge tl-badge-kf" title="Keyframes">◆</span>'],
+  ].forEach(([cls, on, html]) => {
+    const badge = label?.querySelector('.' + cls);
+    if (label && on && !badge) label.insertAdjacentHTML('afterbegin', html);
+    if (badge && !on) badge.remove();
+  });
 }
 
 function updateTimelineWidth() {
@@ -2138,6 +2329,17 @@ function visibleTimeWindow(pxPerSec) {
 
 const RULER_STEPS = [1 / 120, 1 / 60, 1 / 30, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
 
+/** Rótulo curto da régua (0:05 · 1:20 · 1:02:03); passos abaixo de 1 s mostram centésimos */
+function fmtRulerLabel(t, step) {
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  const ss = step < 1
+    ? s.toFixed(2).padStart(5, '0')
+    : String(Math.floor(s + 1e-6)).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
 function renderRuler(W, pxPerSec, fps, t0, t1) {
   tlRuler.style.width = W + 'px';
   tlRuler.innerHTML   = '';
@@ -2145,7 +2347,9 @@ function renderRuler(W, pxPerSec, fps, t0, t1) {
   const frame   = 1 / fps;
   const steps   = [frame, ...RULER_STEPS.filter(s => s > frame)];
   const subStep = steps.find(s => s * pxPerSec >= 8) || 600;
-  const major   = steps.find(s => s * pxPerSec >= 70 && s >= subStep) || 600;
+  // Rótulo só em múltiplos inteiros do passo menor (0,25 s ÷ 1/30 s = 7,5 dava 0:18.67…)
+  const isMultiple = s => Math.abs(s / subStep - Math.round(s / subStep)) < 1e-6;
+  const major   = steps.find(s => s * pxPerSec >= 70 && s >= subStep && isMultiple(s)) || 600;
   const ratio   = Math.max(1, Math.round(major / subStep));
   const end     = Math.min(t1, W / pxPerSec);
 
@@ -2157,7 +2361,7 @@ function renderRuler(W, pxPerSec, fps, t0, t1) {
     const tick = document.createElement('div');
     tick.className = 'ruler-tick' + (isMajor ? ' ruler-major' : '');
     tick.style.left = (t * pxPerSec) + 'px';
-    if (isMajor) tick.textContent = fmtTime(t);
+    if (isMajor) tick.textContent = fmtRulerLabel(t, major);
     fragment.appendChild(tick);
   }
   tlRuler.appendChild(fragment);
@@ -2191,7 +2395,14 @@ function isClipLocked(clip) {
 // ── Eventos da timeline (delegação: 1 listener para todos os blocos/labels) ──
 tlLabels.addEventListener('click', e => {
   const btn = e.target.closest('.tl-track-btn, .tl-add-track-btn');
-  if (!btn) return;
+  if (!btn) {
+    const label = e.target.closest('.tl-label[data-track]');
+    if (!label || e.target.closest('.tl-label-input')) return;
+    const ti = Number(label.dataset.track);
+    deselectClip();
+    selectTrack(state.selectedTrack === ti ? null : ti);
+    return;
+  }
   e.stopPropagation();
   if (btn.classList.contains('tl-add-track-btn')) return window.addTrack();
   const ti = Number(btn.dataset.track);
@@ -2246,27 +2457,15 @@ tlTracks.addEventListener('mousedown', e => {
     selectClip(clipId, additive);
   }
 
+  // Playhead fora do clip: vai para o começo dele (o preview mostra o clip)
+  if (!additive && (state.time < clip.start || state.time >= clip.start + clip.duration)) {
+    window.seekTo?.(clip.start);
+  }
+
   if (!isClipLocked(clip) && (!additive || getSelectedIds().size > 1)) {
     startClipDrag(clipId, e.clientX, e.clientY);
   }
 });
-
-function mountMediaThumbnail(container, tmpl) {
-  if (!container || !tmpl) return;
-
-  const swatch = document.createElement('div');
-  swatch.style.cssText = `
-    position: absolute;
-    inset: 0;
-    background: ${tmpl.color || 'var(--accent)'};
-    border-radius: inherit;
-    opacity: 0.85;
-  `;
-  // Atrás do número e do selo de tipo do card
-  container.prepend(swatch);
-  // Quadro real do clipe (gerado no servidor) assim que ficar pronto
-  window.__paintHtmlPoster?.(container, tmpl);
-}
 
 // #endregion
 
@@ -2276,6 +2475,7 @@ function updatePlayhead(t) {
   tlPlayhead.style.left = x + 'px';
   if (inputTime) inputTime.value = fmtTime(t);
   if (previewTime) previewTime.textContent = fmtTime(t);
+  window.__kfOnTime?.(t);
 }
 
 tlScroll.addEventListener('mousedown', e => {
@@ -2398,6 +2598,9 @@ function cloneTemplateForClip(tmpl) {
     ...tmpl,
     id: mkId(),
     textParams: tmpl.textParams ? { ...tmpl.textParams } : tmpl.textParams,
+    // Cópia de um clip, não um asset novo: a biblioteca conta o uso pelo original
+    inLibrary: false,
+    libraryId: tmpl.libraryId || (tmpl.inLibrary ? tmpl.id : undefined),
   };
   state.templates.push(copy);
   return copy;
@@ -2454,9 +2657,16 @@ function splitClipAt(clip, time) {
     _tx:        clip._tx    ? { ...clip._tx }    : clip._tx,
     _txNat:     clip._txNat ? { ...clip._txNat } : clip._txNat,
   };
+  window.ClipKF?.onSplit(rightClip, rel);   // keyframes de imagem/texto recomeçam em 0 na metade da direita
 
   leftClip.duration  = Math.max(MIN_CLIP_DURATION, leftClip.duration);
   rightClip.duration = Math.max(MIN_CLIP_DURATION, rightClip.duration);
+
+  // Efeitos seguem nas duas metades; saída fica só no fim, entrada só no começo
+  if (clip.fx) {
+    leftClip.fx  = { ...clip.fx, out: undefined };
+    rightClip.fx = { ...clip.fx, in: undefined, transition: undefined };
+  }
 
   // Legenda: cada metade fica com as suas palavras e o seu texto
   if (isTextLike && tmpl?.textTmplId) {
@@ -2498,12 +2708,19 @@ window.splitCurrentScene = function splitCurrentScene() {
     !isClipLocked(c);
 
   const selected = state.clips.filter(c => getSelectedIds().has(c.id) && under(c));
+  const onTrack  = state.selectedTrack == null
+    ? []
+    : state.clips.filter(c => (Number(c.trackIndex) || 0) === state.selectedTrack && under(c));
+  // Track ativa: só ela (nunca corta outra track por engano)
   const targets  = selected.length
     ? selected
-    : state.clips.filter(under).sort((a, b) => b.trackIndex - a.trackIndex).slice(0, 1);
+    : state.selectedTrack != null
+      ? onTrack
+      : state.clips.filter(under).sort((a, b) => b.trackIndex - a.trackIndex).slice(0, 1);
 
   if (!targets.length) {
-    if ($('mbStatus')) $('mbStatus').textContent = 'Nada para cortar no playhead';
+    const trackName = state.selectedTrack != null ? ` na track ${getTrack(state.selectedTrack).name}` : '';
+    if ($('mbStatus')) $('mbStatus').textContent = `Nada para cortar no playhead${trackName}`;
     return;
   }
 
@@ -2556,6 +2773,8 @@ function getSnapCandidates(
       Number(state.time) || 0
     )
   );
+  // Marcadores e bordas de região (markers.js)
+  (window.__mkTimes?.() || []).forEach(t => candidates.add(t));
 
   state.clips.forEach(clip => {
     if (excluded.has(clip.id)) {
@@ -2719,7 +2938,8 @@ function createDragTargetTrackMap(
   dragIds,
   origStates,
   primaryClipId,
-  targetTrackIndex
+  targetTrackIndex,
+  minIndex = 0
 ) {
   const result = new Map();
 
@@ -2741,8 +2961,8 @@ function createDragTargetTrackMap(
       primaryState.trackIndex;
 
     const target = targetTrackIndex + relativeTrack;
-    if (target < 0) result.__clamped = true;
-    result.set(id, Math.max(0, target));
+    if (target < minIndex) result.__clamped = true;
+    result.set(id, Math.max(minIndex, target));
   });
 
   return result;
@@ -3078,34 +3298,35 @@ function startClipDrag(
   let lastTrackResolution = null;
   let lastTargetTrackMap = null;
   let lastSafeDelta = 0;
+  let lastEvent = null;
+  let autoScrollRaf = null;
+  // Rolagem no início: o delta conta o quanto a timeline andou durante o arraste
+  const startScrollLeft = tlScroll.scrollLeft;
   const staticIndex = buildStaticTrackIndex(validDragIds);
 
-  function showNewTrackHint(y) {
+  /**
+   * Sombra do clip na faixa da track nova (acima de todas ou abaixo da
+   * última): o bloco real fica apagado na track de origem até soltar.
+   */
+  function showNewTrackHint(y, above) {
     if (!newTrackHint) {
-      newTrackHint =
-        document.createElement('div');
-
-      newTrackHint.style.cssText = `
-        position:absolute;
-        left:0;
-        right:0;
-        height:2px;
-        background:#82ea00;
-        box-shadow:0 0 6px #82ea00;
-        pointer-events:none;
-        z-index:40;
-      `;
-
-      tlTracks.appendChild(
-        newTrackHint
-      );
+      newTrackHint = document.createElement('div');
+      newTrackHint.className = 'tl-newtrack-ghost';
+      newTrackHint.innerHTML = '<span>Nova track</span>';
+      tlTracks.appendChild(newTrackHint);
     }
 
-    newTrackHint.style.top =
-      `${y}px`;
-
-    newTrackHint.style.display =
-      'block';
+    const primary = state.clips.find(clip => clip.id === clipId);
+    const pxPerSec = PX_PER_SEC * state.zoom;
+    const height = Math.round(trackRowHeight() * 0.7);
+    newTrackHint.style.left = `${(primary?.start || 0) * pxPerSec}px`;
+    newTrackHint.style.width = `${Math.max(8, (primary?.duration || 1) * pxPerSec)}px`;
+    newTrackHint.style.height = `${height}px`;
+    // Acima: sobre o topo da 1ª track (acima dela fica a régua, que esconderia a sombra)
+    newTrackHint.style.top = `${above ? 2 : y + 2}px`;
+    newTrackHint.querySelector('span').textContent = above ? 'Nova track acima' : 'Nova track abaixo';
+    newTrackHint.style.display = 'block';
+    setDragAway(true);
   }
 
   function hideNewTrackHint() {
@@ -3113,6 +3334,42 @@ function startClipDrag(
       newTrackHint.style.display =
         'none';
     }
+    setDragAway(false);
+  }
+
+  function setDragAway(on) {
+    validDragIds.forEach(id => {
+      tlTracks.querySelector(`[data-clip-id="${id}"]`)?.classList.toggle('tl-drag-away', on);
+    });
+  }
+
+  function setDragBlocked(on) {
+    validDragIds.forEach(id => {
+      tlTracks.querySelector(`[data-clip-id="${id}"]`)?.classList.toggle('tl-drag-blocked', on);
+    });
+  }
+
+  /**
+   * Perto das bordas da timeline: rola e reaplica o último movimento.
+   * Um loop só: autoScrollRaf fica preenchido durante a chamada, então o
+   * onMove reaplicado não agenda outro (antes os loops se multiplicavam).
+   */
+  function autoScroll() {
+    if (!_moveData?.dragging || !lastEvent) { autoScrollRaf = null; return; }
+    const rect = tlScroll.getBoundingClientRect();
+    const EDGE = 48;
+    const MAX_STEP = 24;   // px por quadro (~1400 px/s)
+    let speed = 0;
+    if (lastEvent.clientX < rect.left + EDGE) speed = -Math.min(MAX_STEP, Math.ceil((rect.left + EDGE - lastEvent.clientX) / 2));
+    if (lastEvent.clientX > rect.right - EDGE) speed = Math.min(MAX_STEP, Math.ceil((lastEvent.clientX - rect.right + EDGE) / 2));
+    if (!speed) { autoScrollRaf = null; return; }
+    const before = tlScroll.scrollLeft;
+    tlScroll.scrollLeft = Math.max(0, before + speed);
+    if (tlScroll.scrollLeft !== before) {
+      updateTimelineWidth();
+      onMove(lastEvent);
+    }
+    autoScrollRaf = requestAnimationFrame(autoScroll);
   }
 
   function resolveTargetTrack(
@@ -3175,7 +3432,7 @@ function startClipDrag(
         : 0;
 
     if (relativeY < 0) {
-      showNewTrackHint(0);
+      showNewTrackHint(0, true);
 
       return {
         type: 'new',
@@ -3188,17 +3445,15 @@ function startClipDrag(
       relativeY >= totalHeight
     ) {
       showNewTrackHint(
-        totalHeight
+        totalHeight,
+        false
       );
 
-      return {
-        type: 'new',
-
-        trackIndex:
-          minTrackIndex > 0
-            ? minTrackIndex - 1
-            : maxTrackIndex + 1,
-      };
+      // Abaixo da 0 não há índice livre: track virtual -1, aberta ao soltar
+      // (insertTrackAt(0) empurra as outras uma posição para cima)
+      return minTrackIndex > 0
+        ? { type: 'new', trackIndex: minTrackIndex - 1 }
+        : { type: 'new', trackIndex: -1, insertBottom: true };
     }
 
     hideNewTrackHint();
@@ -3295,6 +3550,9 @@ function startClipDrag(
       _moveData.dragging = true;
     }
 
+    lastEvent = event;
+    if (!autoScrollRaf) autoScrollRaf = requestAnimationFrame(autoScroll);
+
     const resolution =
       resolveTargetTrack(
         event.clientY
@@ -3308,14 +3566,15 @@ function startClipDrag(
         validDragIds,
         origStates,
         clipId,
-        resolution.trackIndex
+        resolution.trackIndex,
+        resolution.insertBottom ? -1 : 0
       );
 
     lastTargetTrackMap =
       targetTrackMap;
 
     const desiredDelta =
-      dx /
+      (dx + tlScroll.scrollLeft - startScrollLeft) /
       (
         PX_PER_SEC *
         Math.max(
@@ -3342,6 +3601,7 @@ function startClipDrag(
       );
 
     // Destino impossível (track bloqueada / sem espaço): fica na track de origem
+    setDragBlocked(safeDelta === null);
     if (safeDelta === null) {
       targetTrackMap.clear();
       validDragIds.forEach(id => targetTrackMap.set(id, origStates.get(id).trackIndex));
@@ -3434,6 +3694,15 @@ function startClipDrag(
       lastTrackResolution &&
       lastTargetTrackMap
     ) {
+      // Track nova abaixo da 0: todas sobem uma posição e -1 vira 0
+      const insertedBottom =
+        lastTrackResolution.insertBottom &&
+        [...lastTargetTrackMap.values()].some(index => index < 0);
+      if (insertedBottom) {
+        insertTrackAt(0);
+        lastTargetTrackMap.forEach((index, id) => lastTargetTrackMap.set(id, index + 1));
+      }
+
       validDragIds.forEach(id => {
         const clip =
           state.clips.find(
@@ -3498,6 +3767,10 @@ function startClipDrag(
     }
 
     hideNewTrackHint();
+    setDragBlocked(false);
+    cancelAnimationFrame(autoScrollRaf);
+    autoScrollRaf = null;
+    lastEvent = null;
 
     if (newTrackHint) {
       newTrackHint.remove();
@@ -3801,6 +4074,13 @@ function selectClip(clipId, additive = false) {
   // currentClipId = último clicado (ou null se desmarcou o único)
   state.currentClipId = sel.size ? (sel.has(clipId) ? clipId : [...sel][0]) : null;
 
+  // A track do clip vira a ativa (cortar/apagar seguem nela depois de desmarcar)
+  const current = state.clips.find(c => c.id === state.currentClipId);
+  if (current) {
+    state.selectedTrack = Number(current.trackIndex) || 0;
+    markSelectedTrack();
+  }
+
   // Só troca classes — antes re-renderizava timeline e biblioteca inteiras por clique
   mediaGrid?.querySelectorAll('.media-card').forEach(card => {
     card.classList.toggle('active', card.dataset.clipId === state.currentClipId);
@@ -3816,8 +4096,10 @@ function deselectClip() {
   state.currentClipId = null;
   document.querySelectorAll('.tl-block.tl-selected')
     .forEach(el => el.classList.remove('tl-selected'));
+  // Track ativa continua: o painel mostra a track (áudio/dB)
   if (propsContent)
-    propsContent.innerHTML = '<div class="props-empty">Selecione um clip</div>';
+    propsContent.innerHTML = window.__renderTrackPanel?.(state.selectedTrack) ||
+      '<div class="props-empty">Selecione um clip ou uma track</div>';
   renderMediaPanel();
   updateSelectionFeedback();
   window.__clearTransformOverlay?.();
@@ -3844,6 +4126,7 @@ window.__getSelectedClipIds = () => [...getSelectedIds()];
     const startX   = e.clientX - rect.left;
     const startY   = e.clientY - rect.top;
     const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+    const downRow  = e.target.closest('.tl-row[data-track]');
     const base     = additive ? new Set(getSelectedIds()) : new Set();
     let active     = false;
 
@@ -3910,8 +4193,9 @@ window.__getSelectedClipIds = () => [...getSelectedIds()];
         updateSelectionFeedback();
         window.__onSelectionChange?.(getSelectedIds());
       } else {
-        // Clique simples em área vazia: desmarca e move o playhead até ali
+        // Clique simples em área vazia: desmarca, ativa a track e move o playhead até ali
         if (!additive) deselectClip();
+        selectTrack(downRow ? Number(downRow.dataset.track) : null);
         scrubAt(ev);
       }
     };
@@ -3930,9 +4214,9 @@ window.__getSelectedClipIds = () => [...getSelectedIds()];
 function getActionClipIds() {
   const validIds = [...getSelectedIds()].filter(id => state.clips.some(c => c.id === id));
   if (validIds.length) return validIds;
-  return state.currentClipId && state.clips.some(c => c.id === state.currentClipId)
-    ? [state.currentClipId]
-    : [];
+  if (state.currentClipId && state.clips.some(c => c.id === state.currentClipId)) return [state.currentClipId];
+  const onTrack = selectedTrackClipAt();
+  return onTrack ? [onTrack.id] : [];
 }
 
 /** Primeira track (a partir de `preferred`, subindo) livre no intervalo */
@@ -3953,21 +4237,27 @@ function findFreeTrack(start, end, preferred = 0, excludeIds = []) {
 }
 window.__findFreeTrack = findFreeTrack;
 
+/**
+ * Timeline sem clips. O projeto continua aberto (biblioteca, configurações,
+ * autosave): antes ele era anulado aqui, a interface congelava e o próximo
+ * import criava um projeto novo com nome e resolução padrão.
+ */
 function resetUiWhenProjectEmpty() {
-  // Zera project MAS mantém templates (undo precisa deles)
-  state.project = null;
   state.currentClipId = null;
-  emptyState.style.display  = '';
+  getSelectedIds().clear();
+  Compositor.allIds().forEach(id => Compositor.unmount(id));
+  window.__clearTransformOverlay?.();
+
+  recalcProjectDuration();
+  syncProjectGlobals();
+  renderTimeline();
+  renderProjectSettings();
+  renderMediaPanel();
+
+  emptyState.style.display  = 'flex';
   previewCont.style.display = 'none';
   if (propsContent) propsContent.innerHTML = '<div class="props-empty">Selecione um clip</div>';
-  if (projectContent) projectContent.innerHTML = '<div class="props-empty">Importe HTMLs para começar</div>';
-  if (mediaEmpty) mediaEmpty.style.display = 'flex';
-  mediaGrid.innerHTML  = '';
-  tlLabels.innerHTML   = '<div class="tl-ruler-corner"><span>Tracks</span></div>';
-  tlTracks.innerHTML   = '';
-  tlRuler.innerHTML    = '';
-  totalDur.textContent = fmtTime(0);
-  if ($('mbStatus')) $('mbStatus').textContent = 'Pronto';
+  if ($('mbStatus')) $('mbStatus').textContent = 'Timeline vazia';
   updateSelectionFeedback();
 }
 
@@ -4112,6 +4402,7 @@ function insertTrackAt(index) {
   });
   state.tracks.push(createTrack(index));
   state.tracks.sort((a, b) => b.index - a.index);
+  if (state.selectedTrack != null && state.selectedTrack >= index) state.selectedTrack += 1;
   Compositor.allIds().forEach(id => { const e = Compositor.get(id); if (e) e._transformApplied = false; });
 }
 window.__insertTrackAt = insertTrackAt;
@@ -4267,18 +4558,31 @@ function tlSnapshot() {
     words:  c.words  ? c.words.map(w => ({ ...w })) : c.words,
   }));
   const tracks = (state.tracks || []).map(t => ({ ...t }));
+  // Resolução/fps/fundo: desfazer "mudar formato" também volta o formato
+  const project = state.project
+    ? { res: { ...state.project.res }, fps: state.project.fps, background: state.project.background }
+    : null;
 
   // Chave barata para detectar "nada mudou" (html entra por tamanho + pontas)
   const key = JSON.stringify([
+    project,
     clips.map(c => [c.id, c.templateId, c.start, c.duration, c.trimStart, c.trimEnd,
       c.trackIndex, c.label, c.color, c.volume, c.muted, c.fadeIn, c.fadeOut,
-      c.fitAnimationToClip, c._tx]),
-    tracks.map(t => [t.index, t.name, t.hidden, t.locked, t.muted, t.solo]),
-    templateSnaps.map(t => [t.id, t.textParams, t.html?.length, t.html?.slice(0, 64), t.html?.slice(-64)]),
+      c.fitAnimationToClip, c._tx, c.fx, c.audioFx, c.keyframes, c.blend, c.cam]),
+    tracks.map(t => [t.index, t.name, t.hidden, t.locked, t.muted, t.solo, t.volume]),
+    templateSnaps.map(t => [t.id, t.textParams, t.html?.length, t.html?.slice(0, 64), t.html?.slice(-64), t.layer]),
   ]);
 
-  return { key, clips, tracks, templateSnaps, currentClipId: state.currentClipId };
+  const markers = window.__mkSnap?.() || [];
+  return { key: key + JSON.stringify(markers), clips, tracks, project, templateSnaps, markers, currentClipId: state.currentClipId };
 }
+
+/** Troca de projeto: o histórico do anterior não vale no novo */
+window.__tlResetHistory = () => {
+  _timelineUndoStack.length = 0;
+  _timelineRedoStack.length = 0;
+  tlUpdateUndoUi();
+};
 
 function tlUpdateUndoUi() {
   $('mbUndo')?.classList.toggle('disabled', !_timelineUndoStack.length);
@@ -4290,7 +4594,6 @@ function tlPushUndo() {
 
   const snap = tlSnapshot();
   const top  = _timelineUndoStack[_timelineUndoStack.length - 1];
-  window.__lastUndoSource = 'timeline';
   if (top?.key === snap.key) return;
 
   _timelineUndoStack.push(snap);
@@ -4313,6 +4616,23 @@ function tlRestore(snap) {
   }));
   state.tracks        = snap.tracks.map(t => ({ ...t }));
   state.currentClipId = snap.currentClipId;
+  window.__mkRestore?.(snap.markers);
+
+  // Antes dos templates: textos são refeitos na resolução restaurada
+  const resChanged = Boolean(snap.project && state.project && (
+    snap.project.res.w !== state.project.res.w || snap.project.res.h !== state.project.res.h));
+  if (snap.project && state.project) {
+    state.project.res        = { ...snap.project.res };
+    state.project.fps        = snap.project.fps;
+    state.project.background = snap.project.background;
+  }
+  if (resChanged) {
+    state.templates.forEach(t => {
+      if (t.type === 'text' && t.textTmplId && t.textParams) {
+        t.html = window.__TextRegistry.buildHtml(t.textTmplId, t.textParams, state.project.res) || t.html;
+      }
+    });
+  }
 
   // Marca clips de texto para que o primeiro __TEXT_SIZE após o remount
   // não sobrescreva o _tx restaurado.
@@ -4327,6 +4647,8 @@ function tlRestore(snap) {
     }
     live.textParams     = saved.textParams ? { ...saved.textParams } : live.textParams;
     live.sourceDuration = saved.sourceDuration;
+    // Camadas especiais (sólido, gradiente, forma…): parâmetros e a imagem SVG gerada
+    if (saved.layer) { live.layer = { ...saved.layer }; live.dataUrl = saved.dataUrl; }
 
     if (live.type === 'text' && live.textTmplId && live.textParams) {
       live.html = window.__TextRegistry.buildHtml(
@@ -4341,7 +4663,7 @@ function tlRestore(snap) {
   const used = new Set(state.clips.map(c => c.templateId));
   const keep = new Set(snap.templateSnaps.map(t => t.id));
   state.templates = state.templates.filter(t =>
-    used.has(t.id) || keep.has(t.id) || (t.type !== 'text' && t.type !== 'html') ||
+    used.has(t.id) || keep.has(t.id) || t.inLibrary || (t.type !== 'text' && t.type !== 'html') ||
     _timelineUndoStack.some(s => s.templateSnaps.some(x => x.id === t.id)) ||
     _timelineRedoStack.some(s => s.templateSnaps.some(x => x.id === t.id))
   );
@@ -4372,6 +4694,9 @@ function tlRestore(snap) {
 
   recalcProjectDuration();
   syncProjectGlobals();
+  // Formato restaurado: palco do preview e fundo acompanham
+  syncProjectFormFields();
+  syncPreviewSize();
 
   renderTimeline();
   renderProjectSettings();
@@ -4744,9 +5069,11 @@ function initContextMenu() {
     ?.addEventListener(
       'click',
       () => {
-        const clipId = targetClipId;
+        // Clicou num clip da seleção: todos os clips selecionados viram um vídeo só
+        const sel = getSelectedIds();
+        const ids = targetClipId && sel.has(targetClipId) ? [...sel] : (targetClipId ? [targetClipId] : []);
         close();
-        if (clipId) window.__onClipAIScenes?.(clipId);
+        if (ids.length) window.__onClipAIScenes?.(ids);
       },
       eventOptions
     );

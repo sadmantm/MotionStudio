@@ -6,7 +6,8 @@
     "scripts": {
         "start": "node starter.js",
         "desktop": "node desktop/launcher.js",
-        "desktop:build": "node desktop/build.js"
+        "desktop:build": "node desktop/build.js",
+        "desktop:stub": "node desktop/build-stub.js"
     },
     "dependencies": {
         "cors": "^2.8.6",

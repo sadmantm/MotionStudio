@@ -33,13 +33,55 @@ const SOURCES = [
       };
     },
   },
+  {
+    // 320 sons CC0 com dados para a IA escolher, sincronizar (sync.at) e mixar
+    id: 'sfxkit',
+    name: 'sfxkit',
+    version: '1.0.0',
+    license: 'CC0-1.0',
+    homepage: 'https://github.com/wyzowl/sfx-kit',
+    // jsDelivr recusa o pacote (67 MB > limite de 50 MB); o raw do GitHub, com a tag fixa, libera CORS
+    base: 'https://raw.githubusercontent.com/wyzowl/sfx-kit/v1.0.0/',
+    manifest: 'sounds.json',
+    adapt(m) {
+      return {
+        packs: [{ name: 'sfxkit', description: 'sons sintetizados de alta qualidade, neutros — combinam com qualquer estilo e entre si', bestFor: ['motion graphics', 'interfaces', 'explicadores', 'trailers'] }],
+        cues: (m.sounds || []).map(s => ({
+          name: s.id,
+          category: s.category,
+          description: (s.use_for || []).slice(0, 3).join('; '),
+          duration: s.duration,
+          fits: s.fits_seconds || null,
+          avoid: (s.avoid_for || []).slice(0, 2).join('; '),
+        })),
+        files: Object.fromEntries((m.sounds || []).filter(s => s.file).map(s => [`sfxkit/${s.id}`, {
+          path: s.file,
+          duration: s.duration,
+          sync: s.sync?.at ?? 0,                 // segundos do arquivo até o ponto que encontra o momento
+          underVoice: s.under_voiceover_db ?? null,
+          rate: s.adapt?.rate || null,
+        }])),
+      };
+    },
+    /** Catálogo compacto: categoria → sons com duração e, quando há, o intervalo de movimento que cobrem */
+    prompt(lib) {
+      const byCat = {};
+      lib.cues.forEach(c => { (byCat[c.category] ||= []).push(c); });
+      const line = c => `${c.name}(${Number(c.duration).toFixed(1)}s${c.fits ? `, cobre ${c.fits[0]}–${c.fits[1]}s` : ''})`;
+      return [
+        `Biblioteca "${lib.name}" (${lib.license}) — 320 sons; use sound: "sfxkit/<som>". NEUTRA: combina com qualquer pacote e pode ser a única fonte.`,
+        'O editor posiciona cada som pelo ponto de sincronia dele (o pico/ação): o t da deixa é o INSTANTE da tela que o som deve encontrar, não o início do arquivo. Variações: soft/subtle = discreto (voz, corporativo), hard = enérgico; fast/medium/slow = duração do movimento.',
+        Object.entries(byCat).map(([cat, list]) => `${cat}: ${list.map(line).join(', ')}`).join('\n'),
+      ].join('\n');
+    },
+  },
 ];
 
 const CACHE_DIR = path.join(os.tmpdir(), 'motion-studio-sfx');
 let loading = null;
 
 async function loadSource(src) {
-  const cacheFile = path.join(CACHE_DIR, `${src.id}-${src.version}.json`);
+  const cacheFile = path.join(CACHE_DIR, `${src.id}-${src.version}-r2.json`);
   try {
     return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
   } catch (_) { /* sem cache */ }
@@ -74,6 +116,8 @@ async function promptText() {
   const libs = await catalog();
   if (!libs.length) return '';
   return libs.map(lib => {
+    const src = SOURCES.find(x => x.id === lib.id);
+    if (src?.prompt) return src.prompt(lib);
     const byCat = {};
     lib.cues.forEach(c => { (byCat[c.category] ||= []).push(c.name); });
     return [

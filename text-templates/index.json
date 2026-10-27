@@ -121,6 +121,150 @@
     }
   },
   {
+    "id": "txt_caption_oneword",
+    "name": "Legenda Uma Palavra",
+    "desc": "Uma palavra por vez, grande e no centro, com pop a cada fala (estilo Reels/TikTok)",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_oneword.html",
+    "defaults": {
+      "text": "Uma palavra por vez",
+      "fontFamily": "'Montserrat', sans-serif",
+      "fontSize": 130,
+      "fontWeight": "900",
+      "color": "#ffffff",
+      "highlightColor": "#ffe14d",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
+    "id": "txt_caption_marker",
+    "name": "Legenda Marca-texto",
+    "desc": "Cada palavra falada ganha um marca-texto que cresce por trás dela; a frase vai sendo marcada",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_marker.html",
+    "defaults": {
+      "text": "Marque o que importa",
+      "fontFamily": "'Poppins', sans-serif",
+      "fontSize": 70,
+      "fontWeight": "800",
+      "color": "#ffffff",
+      "highlightColor": "#ffe14d",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
+    "id": "txt_caption_focus",
+    "name": "Legenda Foco",
+    "desc": "A frase inteira na tela com as palavras apagadas; só a palavra falada acende, cresce e muda de cor",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_focus.html",
+    "defaults": {
+      "text": "Só a palavra falada acende",
+      "fontFamily": "'Montserrat', sans-serif",
+      "fontSize": 68,
+      "fontWeight": "800",
+      "color": "#ffffff",
+      "highlightColor": "#82ea00",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
+    "id": "txt_caption_cinema",
+    "name": "Legenda Cinema",
+    "desc": "Legenda clássica de filme: fade suave, fundo escuro translúcido e leitura limpa (sem animação por palavra)",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_cinema.html",
+    "defaults": {
+      "text": "Legenda clássica, limpa e confortável de ler",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 54,
+      "fontWeight": "500",
+      "color": "#ffffff",
+      "highlightColor": "#ffd34d",
+      "align": "center",
+      "bg": "rgba(0,0,0,0.55)",
+      "duration": 3
+    }
+  },
+  {
+    "id": "txt_caption_neon",
+    "name": "Legenda Neon Karaokê",
+    "desc": "Palavras acendem como letreiro de neon (com um leve pisca) conforme são faladas e continuam brilhando",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_neon.html",
+    "defaults": {
+      "text": "Brilha palavra por palavra",
+      "fontFamily": "'Poppins', sans-serif",
+      "fontSize": 70,
+      "fontWeight": "700",
+      "color": "#ffffff",
+      "highlightColor": "#00e5ff",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
+    "id": "txt_caption_wave",
+    "name": "Legenda Onda",
+    "desc": "As palavras sobem em onda enquanto são faladas; a da vez salta, cresce e muda de cor",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_wave.html",
+    "defaults": {
+      "text": "As palavras ondulam enquanto falam",
+      "fontFamily": "'Montserrat', sans-serif",
+      "fontSize": 70,
+      "fontWeight": "900",
+      "color": "#ffffff",
+      "highlightColor": "#ff6bd6",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
+    "id": "txt_caption_underline",
+    "name": "Legenda Sublinhado",
+    "desc": "Frase inteira visível com um sublinhado que desliza de palavra em palavra acompanhando a fala",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_underline.html",
+    "defaults": {
+      "text": "Sublinhado que acompanha cada palavra",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 66,
+      "fontWeight": "800",
+      "color": "#ffffff",
+      "highlightColor": "#3aa0ff",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
+    "id": "txt_caption_impact",
+    "name": "Legenda Impacto",
+    "desc": "MAIÚSCULAS pesadas com contorno; cada palavra entra com soco (escala e giro) e a da vez fica colorida",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_impact.html",
+    "defaults": {
+      "text": "Sem medo de impactar",
+      "fontFamily": "'Anton', 'Impact', sans-serif",
+      "fontSize": 92,
+      "fontWeight": "400",
+      "color": "#ffffff",
+      "highlightColor": "#ffd34d",
+      "align": "center",
+      "bg": "transparent",
+      "duration": 2
+    }
+  },
+  {
     "id": "txt_neon_glow",
     "name": "Neon Glow",
     "desc": "Texto estilo cyberpunk com brilho neon pulsante e efeito de scanlines. Ideal para temas tech, gaming e futurísticos.",

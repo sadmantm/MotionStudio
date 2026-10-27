@@ -1,0 +1,144 @@
+/* fx.css — efeitos e transições (fx-panel.js): abas da biblioteca, painel do clip, marcas na timeline */
+
+/* #region Abas Efeitos / Transições */
+#tabEffects, #tabTransitions { overflow-y: auto; }
+.fx-tab-hint {
+  margin: 10px 10px 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.fx-section {
+  padding: 12px 10px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.fx-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+  padding: 0 10px 6px;
+}
+.fx-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fx-card-view {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  background: #050507;
+  transition: border-color .12s;
+}
+.fx-card:hover .fx-card-view { border-color: var(--accent); }
+.fx-card-view img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fx-solo, .fx-a, .fx-b {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.fx-b { visibility: hidden; }   /* só aparece na prévia do hover */
+.fx-card-name {
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* #endregion */
+
+/* #region Painel do clip */
+.fx-title { display: flex; align-items: center; justify-content: space-between; }
+.fx-clear {
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.fx-clear:hover { color: var(--danger); }
+.fx-slider .prop-range { flex: 1; min-width: 0; }
+.fx-slider[hidden] { display: none; }
+.fx-val {
+  width: 34px;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.fx-row .fx-select { flex: 1; min-width: 0; }
+.fx-row .fx-dur { width: 52px; flex: 0 0 52px; }
+.fx-hint { margin: 4px 2px 0; font-size: 10.5px; line-height: 1.45; color: var(--text-muted); }
+/* #endregion */
+
+.fx-val[data-edit] { cursor: text; border-radius: 3px; }
+.fx-val[data-edit]:hover { color: var(--text); background: var(--bg4); }
+.fx-val-input {
+  width: 48px;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  text-align: right;
+}
+
+/* Transformar */
+.tf-pos .prop-input { width: 0; flex: 1; min-width: 0; }
+.tf-axis { font-size: 10px; font-weight: 700; color: var(--text-muted); }
+.tf-buttons { display: flex; gap: 4px; margin-top: 6px; }
+.tf-btn {
+  flex: 1;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  background: var(--bg3);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tf-btn:hover { border-color: var(--border3); background: var(--bg4); }
+.tf-btn[data-on] { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.tf-align .tf-btn { font-size: 13px; }
+
+/* #region Timeline */
+.tl-badge-fx { background: var(--accent); }
+.tl-fx-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.tl-fx-trans {
+  left: 0;
+  background: linear-gradient(90deg, rgba(130, 234, 0, .45), rgba(130, 234, 0, 0));
+  border-left: 2px solid var(--accent);
+}
+.tl-fx-in  { left: 0;  background: linear-gradient(90deg, rgba(255, 255, 255, .28), rgba(255, 255, 255, 0)); }
+.tl-fx-out { right: 0; background: linear-gradient(270deg, rgba(255, 255, 255, .28), rgba(255, 255, 255, 0)); }
+.tl-block.tl-fx-drop { box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(130, 234, 0, .45); }
+/* #endregion */
