@@ -1279,6 +1279,12 @@ async function openMotionStudioProject(file = null) {
     return false;
   }
 
+  // Com a biblioteca de projetos, o .ms vira um projeto novo dela: o arquivo
+  // vai direto ao servidor (sem JSON.parse aqui), com progresso na tela
+  if (window.MSProjects?.importFile) {
+    return window.MSProjects.importFile(selectedFile);
+  }
+
   const status = $('mbStatus');
 
   if (status) {
@@ -3426,6 +3432,8 @@ function renderProjectSettings() {
               : ''
           }
 
+          ${window.__renderLintProps?.(clip, tmpl) || ''}
+
           ${window.__renderCameraProps?.(clip, tmpl) || ''}
 
           ${window.__renderLayerProps?.(clip, tmpl) || ''}
@@ -3433,6 +3441,8 @@ function renderProjectSettings() {
           ${window.__renderTransformProps?.(clip, tmpl) || ''}
 
           ${window.__renderFxProps?.(clip, tmpl) || ''}
+
+          ${window.__renderMattingProps?.(clip, tmpl) || ''}
 
           ${window.__renderAnimProps?.(clip, tmpl) || ''}
 

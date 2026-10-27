@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800;900&family=Inter:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root { --hl: {{color}}; --hl: {{highlightColor}}; }
+
+  html, body {
+    width: {{w}}px;
+    height: {{h}}px;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  body { position: relative; font-family: {{fontFamily}}; }
+
+  /* Faixa inferior; bottom e laterais vêm do script conforme a proporção */
+  .cap-safe {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .cap-block {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    transform-origin: 50% 100%;
+    opacity: 0;
+    font-size: {{fontSize}}px;
+  }
+
+  /* Caixa: um só caminho SVG que abraça cada linha (cantos côncavos entre linhas) */
+  .cap-box {
+    position: absolute;
+    left: 0;
+    top: 0;
+    overflow: visible;
+    z-index: 0;
+    filter: drop-shadow(0 0.04em 0.12em rgba(0,0,0,.25));
+  }
+
+  #__txt_el {
+    position: relative;
+    z-index: 1;
+    display: block;
+    text-align: {{align}};
+    font-family: {{fontFamily}};
+    font-size: {{fontSize}}px;
+    font-weight: {{fontWeight}};
+    color: {{color}};
+    line-height: 1.32;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
+
+  .tw { display: inline; }
+</style>
+</head>
+<body>
+  <div class="cap-safe" id="__cap_safe">
+    <div class="cap-block" id="__cap_block">
+      <svg class="cap-box" id="__cap_box" xmlns="http://www.w3.org/2000/svg"><path id="__cap_path"/></svg>
+      <div id="__txt_el">{{text}}</div>
+    </div>
+  </div>
+
+<script type="application/json" id="__words">{{wordsJson}}</script>
+
+<script>
+(function () {
+  'use strict';
+
+  // Função pura de t: sem rAF, timers ou Date.now (preview e export iguais)
+  var W   = Number('{{w}}') || 1080;
+  var H   = Number('{{h}}') || 1920;
+  var FPS = 30;
+  var DUR = Number('{{duration}}') || 2;
+  var BOX_COLOR = '{{bg}}';
+  if (!BOX_COLOR || BOX_COLOR === 'transparent' || !(window.CSS && CSS.supports && CSS.supports('color', BOX_COLOR))) BOX_COLOR = '#ffffff';
+
+  var safe  = document.getElementById('__cap_safe');
+  var block = document.getElementById('__cap_block');
+  var box   = document.getElementById('__cap_box');
+  var path  = document.getElementById('__cap_path');
+  var el    = document.getElementById('__txt_el');
+  path.setAttribute('fill', BOX_COLOR);
+
+  var BASE = getComputedStyle(el).color;
+  var HIGHLIGHT = getComputedStyle(document.documentElement).getPropertyValue('--hl').trim() || BASE;
+
+  // ── Área segura (UI do TikTok/Reels/Shorts no 9:16) ──────────
+  (function layoutSafeArea() {
+    var ratio = H / W;
+    var bottom, side;
+    if (ratio >= 1.4)      { bottom = H * 0.22; side = W * 0.09; }
+    else if (ratio >= 0.9) { bottom = H * 0.14; side = W * 0.09; }
+    else                   { bottom = H * 0.10; side = W * 0.14; }
+    safe.style.bottom       = Math.round(bottom) + 'px';
+    safe.style.paddingLeft  = Math.round(side) + 'px';
+    safe.style.paddingRight = Math.round(side) + 'px';
+    var align = getComputedStyle(el).textAlign;
+    safe.style.justifyContent =
+      align === 'left' || align === 'start' ? 'flex-start'
+        : align === 'right' || align === 'end' ? 'flex-end' : 'center';
+  })();
+
+  /**
+   * Contorno de várias linhas: desce pela direita, volta pela esquerda.
+   * Degrau para fora = canto côncavo seguido de convexo; para dentro, o
+   * contrário. Raio limitado à metade do degrau e da altura da linha.
+   */
+  function roundedLinesPath(lines, r) {
+    var n = lines.length;
+    if (!n) return '';
+    function f(v) { return v.toFixed(2); }
+    function arc(rr, x, y, convex) { return ' A' + f(rr) + ' ' + f(rr) + ' 0 0 ' + (convex ? 1 : 0) + ' ' + f(x) + ' ' + f(y); }
+    var first = lines[0], last = lines[n - 1];
+    var r0 = Math.min(r, (first.right - first.left) / 2, (first.bottom - first.top) / 2);
+    var d = 'M' + f(first.left + r0) + ' ' + f(first.top) + ' L' + f(first.right - r0) + ' ' + f(first.top) + arc(r0, first.right, first.top + r0, true);
+    for (var i = 0; i < n - 1; i++) {
+      var a = lines[i], b = lines[i + 1], y = a.bottom, dx = b.right - a.right;
+      if (Math.abs(dx) < 1) continue;
+      var rr = Math.min(r, Math.abs(dx) / 2, (a.bottom - a.top) / 2, (b.bottom - b.top) / 2);
+      d += ' L' + f(a.right) + ' ' + f(y - rr);
+      if (dx > 0) d += arc(rr, a.right + rr, y, false) + ' L' + f(b.right - rr) + ' ' + f(y) + arc(rr, b.right, y + rr, true);
+      else d += arc(rr, a.right - rr, y, true) + ' L' + f(b.right + rr) + ' ' + f(y) + arc(rr, b.right, y + rr, false);
+    }
+    var rn = Math.min(r, (last.right - last.left) / 2, (last.bottom - last.top) / 2);
+    d += ' L' + f(last.right) + ' ' + f(last.bottom - rn) + arc(rn, last.right - rn, last.bottom, true);
+    d += ' L' + f(last.left + rn) + ' ' + f(last.bottom) + arc(rn, last.left, last.bottom - rn, true);
+    for (var j = n - 1; j > 0; j--) {
+      var lo = lines[j], up = lines[j - 1], yy = lo.top, dl = up.left - lo.left;
+      if (Math.abs(dl) < 1) continue;
+      var r2 = Math.min(r, Math.abs(dl) / 2, (lo.bottom - lo.top) / 2, (up.bottom - up.top) / 2);
+      d += ' L' + f(lo.left) + ' ' + f(yy + r2);
+      if (dl < 0) d += arc(r2, lo.left - r2, yy, false) + ' L' + f(up.left + r2) + ' ' + f(yy) + arc(r2, up.left, yy - r2, true);
+      else d += arc(r2, lo.left + r2, yy, true) + ' L' + f(up.left - r2) + ' ' + f(yy) + arc(r2, up.left, yy - r2, false);
+    }
+    d += ' L' + f(first.left) + ' ' + f(first.top + r0) + arc(r0, first.left + r0, first.top, true) + ' Z';
+    return d;
+  }
+
+  // ── Texto → palavras com tempo ───────────────────────────────
+  function readText(node) {
+    var out = '';
+    node.childNodes.forEach(function (child) {
+      if (child.nodeType === 3) out += child.nodeValue;
+      else if (child.nodeName === 'BR') out += '\n';
+      else if (child.nodeType === 1) out += readText(child);
+    });
+    return out;
+  }
+
+  function readWordsJson() {
+    try {
+      var raw = (document.getElementById('__words') || {}).textContent || '';
+      if (!raw.trim()) return null;
+      var arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  var JSON_WORDS = readWordsJson();
+  var words = [];
+  var sentinel = null;
+  var builtFor = null;
+
+  function timings(count) {
+    if (JSON_WORDS && JSON_WORDS.length === count) {
+      return JSON_WORDS.map(function (w) {
+        var s = Math.max(0, Math.min(DUR, Number(w && w.start) || 0));
+        var e = Math.max(s, Math.min(DUR, Number(w && w.end) || s));
+        return { start: s, end: e };
+      });
+    }
+    var lead = Math.min(0.08, DUR * 0.04), span = Math.max(0.05, DUR - lead - Math.min(0.3, DUR * 0.15));
+    return Array.from({ length: count }, function (_, i) {
+      return { start: lead + (span * i) / count, end: lead + (span * (i + 1)) / count };
+    });
+  }
+
+  function measure() {
+    // Mede sem a escala/deslocamento da entrada (o getBoundingClientRect já viria encolhido)
+    var prevTransform = block.style.transform;
+    block.style.transform = 'none';
+    var origin = block.getBoundingClientRect();
+    var em = parseFloat(getComputedStyle(el).fontSize) || 64;
+    var padX = em * 0.24, padY = em * 0.05;
+    var lines = [];
+    words.forEach(function (w) {
+      var rects = w.el.getClientRects();
+      Array.prototype.forEach.call(rects, function (rc) {
+        var top = rc.top - origin.top, bottom = rc.bottom - origin.top;
+        var line = lines.find(function (l) { return Math.abs(l.mid - (top + bottom) / 2) < em * 0.3; });
+        if (!line) { line = { left: Infinity, right: -Infinity, top: top, bottom: bottom, mid: (top + bottom) / 2 }; lines.push(line); }
+        line.left = Math.min(line.left, rc.left - origin.left);
+        line.right = Math.max(line.right, rc.right - origin.left);
+        line.top = Math.min(line.top, top);
+        line.bottom = Math.max(line.bottom, bottom);
+      });
+    });
+    lines.sort(function (a, b) { return a.top - b.top; });
+    lines.forEach(function (l) { l.left -= padX; l.right += padX; l.top -= padY; l.bottom += padY; });
+    // Linhas encostadas: o contorno é um só, sem frestas
+    for (var i = 0; i < lines.length - 1; i++) {
+      var midY = (lines[i].bottom + lines[i + 1].top) / 2;
+      lines[i].bottom = midY;
+      lines[i + 1].top = midY;
+    }
+    box.setAttribute('width', Math.ceil(origin.width));
+    box.setAttribute('height', Math.ceil(origin.height));
+    path.setAttribute('d', roundedLinesPath(lines, em * 0.26));
+    block.style.transform = prevTransform;
+  }
+
+  function build() {
+    var text = readText(el).replace(/\r/g, '');
+    var frag = document.createDocumentFragment();
+    var tokens = [];
+    text.split('\n').forEach(function (line, li, all) {
+      var parts = line.split(/\s+/).filter(Boolean);
+      parts.forEach(function (word, wi) {
+        var span = document.createElement('span');
+        span.className = 'tw';
+        span.textContent = word;
+        frag.appendChild(span);
+        if (wi < parts.length - 1) frag.appendChild(document.createTextNode(' '));
+        tokens.push(span);
+      });
+      if (li < all.length - 1 && parts.length) frag.appendChild(document.createElement('br'));
+    });
+    sentinel = document.createElement('span');
+    sentinel.style.display = 'none';
+    frag.appendChild(sentinel);
+    el.textContent = '';
+    el.appendChild(frag);
+    var times = timings(tokens.length);
+    words = tokens.map(function (span, i) { return { el: span, start: times[i].start, end: times[i].end }; });
+    builtFor = DUR;
+    measure();
+  }
+
+  function ensureBuilt() {
+    if (!sentinel || sentinel.parentNode !== el || builtFor !== DUR) build();
+  }
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function outQuart(p) { p = clamp(p, 0, 1); return 1 - Math.pow(1 - p, 4); }
+
+  function seek(t) {
+    t = Number(t);
+    if (!isFinite(t) || t < 0) t = 0;
+    ensureBuilt();
+    // Caixa chega e para (sem quique em texto); some no fim
+    var IN = Math.min(0.16, DUR * 0.2), OUT = Math.min(0.12, DUR * 0.12);
+    var k = t <= 0 ? 0 : outQuart(t / IN);
+    var op = Math.min(k, clamp((DUR - t) / Math.max(0.001, OUT), 0, 1));
+    block.style.opacity = String(op);
+    block.style.transform = 'translateY(' + ((1 - k) * 0.18).toFixed(4) + 'em) scale(' + (0.96 + 0.04 * k).toFixed(4) + ')';
+    for (var i = 0; i < words.length; i++) {
+      var w = words[i];
+      var next = words[i + 1];
+      var activeEnd = next ? Math.max(w.end, next.start) : Math.max(w.end, w.start + 0.25);
+      w.el.style.color = t >= w.start && t < activeEnd ? HIGHLIGHT : BASE;
+    }
+  }
+
+  function fontsReady() {
+    if (!document.fonts || !document.fonts.load) return Promise.resolve();
+    var cs = getComputedStyle(el);
+    return Promise.all([
+      document.fonts.load(cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily, readText(el) || 'Aa'),
+      document.fonts.ready,
+    ]).then(function () {}, function () {});
+  }
+
+  var readyPromise = null;
+
+  window.Motion = {
+    config: {
+      get durationInSeconds() { return DUR; },
+      fps: FPS,
+      get totalFrames() { return Math.round(DUR * FPS); },
+    },
+    whenReady: function () {
+      // Fonte nova muda a largura das linhas: remede depois de carregar
+      if (!readyPromise) readyPromise = fontsReady().then(function () { build(); seek(0); });
+      return readyPromise;
+    },
+    setDuration: function (d) {
+      d = Number(d);
+      if (isFinite(d) && d > 0) { DUR = d; build(); }
+    },
+    seek: seek,
+    renderFrame: function (f) { seek((Number(f) || 0) / FPS); },
+  };
+
+  build();
+  seek(0);
+})();
+</script>
+</body>
+</html>

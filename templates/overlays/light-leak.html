@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Light leak</title>
+<!-- Overlay do Motion Studio: vazamento de luz de lente. Use com mesclagem "Tela" (o editor já aplica). -->
+<style>
+  html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: transparent; }
+  .leak { position: absolute; left: 0; top: 0; border-radius: 50%; will-change: transform, opacity; }
+  .streak { position: absolute; left: 0; top: 0; will-change: transform, opacity; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+  const PALETTE = /*ms:palette*/'warm';
+  const COLORS = {
+    warm:  ['#ff6a00', '#ffb347', '#ff2e63'],
+    cool:  ['#2f8bff', '#6ef3ff', '#7b5cff'],
+    prism: ['#ff3d6e', '#ffd23f', '#3ee8b5', '#4d7cff'],
+  }[PALETTE] || ['#ff6a00', '#ffb347', '#ff2e63'];
+  const DUR = 4;
+  const stage = document.getElementById('stage');
+  let blobs = [], streak = null, W = 0, H = 0;
+
+  function build() {
+    W = innerWidth; H = innerHeight;
+    const S = Math.max(W, H);
+    stage.textContent = '';
+    blobs = COLORS.map((c, i) => {
+      const el = document.createElement('div');
+      el.className = 'leak';
+      const size = S * (0.55 + 0.35 * MS.random('size' + i));
+      el.style.width = el.style.height = size + 'px';
+      el.style.background = `radial-gradient(circle, ${c} 0%, ${c}aa 22%, ${c}00 68%)`;
+      el.style.filter = `blur(${Math.round(S * 0.04)}px)`;
+      stage.appendChild(el);
+      return { el, size };
+    });
+    streak = document.createElement('div');
+    streak.className = 'streak';
+    streak.style.width = S * 1.6 + 'px';
+    streak.style.height = S * 0.22 + 'px';
+    streak.style.background = `linear-gradient(90deg, transparent, ${COLORS[1]}66 45%, #fff6 50%, ${COLORS[1]}66 55%, transparent)`;
+    streak.style.filter = `blur(${Math.round(S * 0.03)}px)`;
+    stage.appendChild(streak);
+  }
+
+  MS.motion({
+    fps: 30,
+    durationInSeconds: 4,
+    ready: build,
+    render(t) {
+      // Entra e sai; no meio só a luz passeando (o vazamento é o próprio efeito)
+      const env = MS.interpolate(t, [0, 0.7, DUR - 0.9, DUR], [0, 1, 1, 0], { easing: [MS.ease.outQuart, MS.ease.linear, MS.ease.inQuad] });
+      blobs.forEach((b, i) => {
+        const x = W * (0.5 + 0.55 * MS.noise2D('lx' + i, t * 0.16, i * 3.1));
+        const y = H * (0.5 + 0.55 * MS.noise2D('ly' + i, t * 0.13, i * 7.7));
+        const flicker = 0.78 + 0.22 * MS.noise2D('fl' + i, t * 1.1, 0);
+        b.el.style.transform = `translate(${(x - b.size / 2).toFixed(1)}px, ${(y - b.size / 2).toFixed(1)}px)`;
+        b.el.style.opacity = (env * flicker * 0.9).toFixed(3);
+      });
+      const sx = MS.interpolate(t, [0, DUR], [-0.6, 0.4]) * W;
+      streak.style.transform = `translate(${sx.toFixed(1)}px, ${(H * 0.38).toFixed(1)}px) rotate(-18deg)`;
+      streak.style.opacity = (env * 0.55).toFixed(3);
+    },
+  });
+</script>
+</body>
+</html>

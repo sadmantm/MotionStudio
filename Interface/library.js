@@ -56,7 +56,7 @@
   function srcKey(t) {
     return t.type === 'html'
       ? `${t.html?.length}|${t.html?.slice(0, 40)}|${t.html?.slice(-40)}`
-      : (t.dataUrl || t.objectUrl || '');
+      : (t.proxyUrl || t.dataUrl || t.objectUrl || '');
   }
 
   /** templateId do asset → nº de clips (clips de cópias contam para o original) */

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Anotação à mão</title>
+<!-- Overlay do Motion Studio: traço feito à mão, desenhado na hora. Ajuste a caixa do clipe sobre o que quer destacar. -->
+<style>
+  html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: transparent; }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+<svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+  const KIND = /*ms:kind*/'circle';
+  const COLOR = /*ms:color*/'#ff3b30';
+  const DUR = 2.5;
+  const DRAW = 0.6;
+  const svg = document.getElementById('svg');
+  let strokes = [];
+
+  /** Linha com tremida de mão: pontos ao longo do segmento com desvio suave */
+  function wobblyLine(x1, y1, x2, y2, seed, amp) {
+    const n = 18, pts = [];
+    for (let i = 0; i <= n; i++) {
+      const k = i / n;
+      const off = MS.noise2D(seed, k * 2.3, 0) * amp;
+      const nx = -(y2 - y1), ny = x2 - x1, len = Math.hypot(nx, ny) || 1;
+      pts.push([x1 + (x2 - x1) * k + (nx / len) * off, y1 + (y2 - y1) * k + (ny / len) * off]);
+    }
+    return pts;
+  }
+  const toD = pts => pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+
+  function shapes(W, H) {
+    const m = Math.min(W, H);
+    const amp = m * 0.012;
+    const pad = 0.08;
+    const L = W * pad, R = W * (1 - pad), T = H * pad, B = H * (1 - pad);
+    switch (KIND) {
+      case 'underline': return [wobblyLine(L, B - H * 0.02, R, B - H * 0.05, 'u1', amp), wobblyLine(L + W * 0.03, B + H * 0.01, R - W * 0.02, B - H * 0.015, 'u2', amp)];
+      case 'strike': return [wobblyLine(L, H * 0.53, R, H * 0.47, 's1', amp)];
+      case 'cross': return [wobblyLine(L, T, R, B, 'c1', amp), wobblyLine(R, T, L, B, 'c2', amp)];
+      case 'highlight': return [wobblyLine(L, H * 0.52, R, H * 0.48, 'h1', amp * 0.6)];
+      case 'box': {
+        const j = (s, k) => MS.noise2D(s, k, 0) * amp * 1.5;
+        return [
+          [...wobblyLine(L + j('b0', 1), T, R + W * 0.02, T + j('b1', 2), 'bt', amp), ...wobblyLine(R, T - H * 0.02, R + j('b2', 3), B, 'br', amp)],
+          [...wobblyLine(R + W * 0.01, B, L - W * 0.02, B + j('b3', 4), 'bb', amp), ...wobblyLine(L, B + H * 0.02, L + j('b4', 5), T - H * 0.01, 'bl', amp)],
+        ];
+      }
+      default: {   // circle: laço de ~1,15 volta, como quem circula na pressa
+        const cx = W / 2, cy = H / 2, rx = (R - L) / 2, ry = (B - T) / 2, pts = [];
+        const turns = 1.15, n = 90, start = -2.2;
+        for (let i = 0; i <= n; i++) {
+          const k = i / n, a = start + k * turns * Math.PI * 2;
+          const wob = 1 + MS.noise2D('ci', k * 3, 0) * 0.06 + k * 0.05;
+          pts.push([cx + Math.cos(a) * rx * wob, cy + Math.sin(a) * ry * wob]);
+        }
+        return [pts];
+      }
+    }
+  }
+
+  function build() {
+    const W = innerWidth, H = innerHeight, m = Math.min(W, H);
+    svg.textContent = '';
+    const marker = KIND === 'highlight';
+    strokes = shapes(W, H).map((pts, i) => {
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', toD(pts));
+      p.setAttribute('stroke', COLOR);
+      p.setAttribute('stroke-width', marker ? H * 0.42 : Math.max(5, m * 0.028));
+      if (marker) { p.style.strokeLinecap = 'butt'; p.setAttribute('stroke-opacity', '0.55'); }
+      svg.appendChild(p);
+      return { el: p, i };
+    });
+  }
+
+  MS.motion({
+    fps: 30,
+    durationInSeconds: DUR,
+    ready: build,
+    render(t) {
+      const n = strokes.length;
+      strokes.forEach(({ el, i }) => {
+        // Traços em sequência, cada um começando antes do anterior terminar
+        const t0 = (i * DRAW * 0.55) / Math.max(1, n - 0.45);
+        MS.path.draw(el, MS.ease.outQuart(MS.seg(t, t0, t0 + DRAW)));
+      });
+      svg.style.opacity = MS.interpolate(t, [DUR - 0.3, DUR], [1, 0]).toFixed(3);
+    },
+  });
+</script>
+</body>
+</html>

@@ -36,6 +36,24 @@
     }
   },
   {
+    "id": "txt_caption_tiktok",
+    "name": "Legenda Caixa TikTok",
+    "desc": "Caixa arredondada que abraça cada linha, com cantos suaves entre linhas de tamanhos diferentes (estilo TikTok)",
+    "category": "Legendas Dinâmicas",
+    "file": "text-templates/templates/txt_caption_tiktok.html",
+    "defaults": {
+      "text": "Legenda no estilo\ndo TikTok com caixa",
+      "fontFamily": "'Montserrat', sans-serif",
+      "fontSize": 64,
+      "fontWeight": "800",
+      "color": "#111111",
+      "highlightColor": "#111111",
+      "align": "center",
+      "bg": "#ffffff",
+      "duration": 2
+    }
+  },
+  {
     "id": "txt_glitch_pop",
     "name": "Glitch Pop",
     "desc": "Split RGB neon com aberração cromática e glitch de entrada",

@@ -7,7 +7,9 @@
         "start": "node starter.js",
         "desktop": "node desktop/launcher.js",
         "desktop:build": "node desktop/build.js",
-        "desktop:stub": "node desktop/build-stub.js"
+        "desktop:stub": "node desktop/build-stub.js",
+        "postinstall": "node desktop/ffmpeg.js --optional",
+        "ffmpeg:update": "node desktop/ffmpeg.js --force"
     },
     "dependencies": {
         "cors": "^2.8.6",

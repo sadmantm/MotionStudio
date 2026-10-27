@@ -54,6 +54,16 @@
     if (fx.motion?.type && fx.motion.type !== 'none') out.motion = { type: fx.motion.type, strength: Number(fx.motion.strength) || 1 };
     if (fx.flipH) out.flipH = true;
     if (fx.flipV) out.flipV = true;
+    // Efeito de pixel (media-fx.js): só vídeo e imagem
+    if (fx.pixel?.type && window.MediaFX?.EFFECTS[fx.pixel.type]) {
+      const pixel = { type: fx.pixel.type, amount: Math.max(0, Math.min(1, Number(fx.pixel.amount ?? 0.5))) };
+      const r = fx.pixel.region;
+      if (pixel.type === 'pixelate' && r) {
+        const c = v => Math.max(0, Math.min(1, Number(v) || 0));
+        pixel.region = { x: c(r.x), y: c(r.y), w: Math.max(0.01, c(r.w)), h: Math.max(0.01, c(r.h)) };
+      }
+      out.pixel = pixel;
+    }
     ['in', 'out', 'transition'].forEach(k => {
       const tr = fx[k];
       if (tr?.type && tr.type !== 'none') out[k] = { type: tr.type, duration: Math.max(0.1, Number(tr.duration) || DEFAULT_DUR[k]) };
@@ -126,6 +136,7 @@
               ${window.ClipKF?.controls(clip, key) || ''}
             </div>`;
         }).join('')}
+        ${pixelProps(fx, tmpl)}
         <div class="prop-row">
           <label>Movimento</label>
           <select class="prop-input" data-fx="motion.type">${options(FX().MOTIONS, fx.motion?.type || 'none')}</select>
@@ -145,6 +156,30 @@
         ${trRow('out', 'Saída', FX().IN_OUT)}
         ${fx.transition && !prevClip(clip) ? '<p class="fx-hint">Nenhum clip encostado antes deste na mesma track: a transição revela o que estiver embaixo.</p>' : ''}
       </div>`;
+  }
+
+  /** Efeito de pixel (media-fx.js) — só para vídeo e imagem */
+  function pixelProps(fx, tmpl) {
+    if (!window.MediaFX || (tmpl?.type !== 'video' && tmpl?.type !== 'image')) return '';
+    const p = fx.pixel || {};
+    const pct = v => Math.round((Number(v) || 0) * 100);
+    const region = p.region || { x: 0, y: 0, w: 1, h: 1 };
+    const num = (key, label) => `<label class="fx-region-cell">${label}<input class="prop-input" type="number" min="0" max="100" step="1" value="${pct(region[key])}" data-fx-region="${key}"></label>`;
+    return `
+        <div class="prop-row">
+          <label title="Efeitos por pixel em WebGL: pixelizar (também só numa região), meio-tom, ASCII, tela CRT e glitch">Pixel</label>
+          <select class="prop-input" data-fx="pixel.type">${options({ none: 'Nenhum', ...window.MediaFX.EFFECTS }, p.type || 'none')}</select>
+        </div>
+        <div class="prop-row fx-slider"${p.type ? '' : ' hidden'}>
+          <label>Intensidade</label>
+          <input type="range" class="prop-range" min="0" max="1" step="0.05" value="${p.amount ?? 0.5}" data-fx="pixel.amount" data-default="0.5">
+          <span class="fx-val" data-edit title="Clique para digitar">${Number(p.amount ?? 0.5).toFixed(2)}</span>
+        </div>
+        ${p.type === 'pixelate' ? `
+        <div class="prop-row fx-region" title="Área pixelizada, em % da caixa do clip (esconder um e-mail, uma placa…). 0/0/100/100 = tudo">
+          <label>Região %</label>
+          <div class="fx-region-grid">${num('x', 'X')}${num('y', 'Y')}${num('w', 'L')}${num('h', 'A')}</div>
+        </div>` : ''}`;
   }
 
   /** Lê o caminho "adjust.brightness" etc. de um controle e grava no fx */
@@ -177,9 +212,19 @@
       updateFx([clip], fx => setPath(fx, ctl.dataset.fx, Number(ctl.value)), { undo: !undoArmed });
       undoArmed = true;
       const val = ctl.parentElement.querySelector('.fx-val');
-      if (val) val.textContent = ctl.dataset.fx === 'motion.strength' ? `${Number(ctl.value).toFixed(1)}×` : ctl.value;
+      if (val) val.textContent = ctl.dataset.fx === 'motion.strength' ? `${Number(ctl.value).toFixed(1)}×` : ctl.dataset.fx === 'pixel.amount' ? Number(ctl.value).toFixed(2) : ctl.value;
     });
     props.addEventListener('change', e => {
+      const region = e.target.closest('.fx-props [data-fx-region]');
+      if (region) {
+        const clip = st().clips.find(c => c.id === region.closest('.fx-props').dataset.clipId);
+        if (!clip) return;
+        updateFx([clip], fx => {
+          fx.pixel = { ...(fx.pixel || {}) };
+          fx.pixel.region = { x: 0, y: 0, w: 1, h: 1, ...(fx.pixel.region || {}), [region.dataset.fxRegion]: Number(region.value) / 100 };
+        });
+        return;
+      }
       const ctl = e.target.closest('.fx-props [data-fx]');
       if (!ctl) return;
       if (ctl.type === 'range') { undoArmed = false; return; }
@@ -201,7 +246,7 @@
       if (!e.target.closest('[data-fx-action="clear-fx"]')) return;
       const clip = st().clips.find(c => c.id === e.target.closest('.fx-props').dataset.clipId);
       if (!clip) return;
-      updateFx([clip], fx => { delete fx.look; delete fx.adjust; delete fx.motion; });
+      updateFx([clip], fx => { delete fx.look; delete fx.adjust; delete fx.motion; delete fx.pixel; });
       window.__renderProps?.();
     });
   }
@@ -233,7 +278,9 @@
       <div class="fx-section">Filtros</div>
       <div class="fx-grid">${Object.entries(FX().LOOKS).map(([id, v]) => card({ kind: 'look', id, label: v.label, sample: lookSample(id) })).join('')}</div>
       <div class="fx-section">Movimento</div>
-      <div class="fx-grid">${Object.entries(FX().MOTIONS).map(([id, label]) => card({ kind: 'motion', id, label: id === 'none' ? 'Sem movimento' : label, sample: `<span class="fx-solo"><img src="${SAMPLE}" alt=""></span>` })).join('')}</div>`;
+      <div class="fx-grid">${Object.entries(FX().MOTIONS).map(([id, label]) => card({ kind: 'motion', id, label: id === 'none' ? 'Sem movimento' : label, sample: `<span class="fx-solo"><img src="${SAMPLE}" alt=""></span>` })).join('')}</div>
+      ${window.MediaFX ? `<div class="fx-section">Pixel (vídeo e imagem)</div>
+      <div class="fx-grid">${Object.entries(window.MediaFX.EFFECTS).map(([id, label]) => card({ kind: 'pixel', id, label, sample: `<img class="fx-pixel-sample" data-pixel="${id}" src="${SAMPLE}" alt="">` })).join('')}</div>` : ''}`;
     transitions.innerHTML = `
       <p class="fx-tab-hint">Entre clips: aplicada no começo do clip selecionado, passando do clip anterior da mesma track.</p>
       <div class="fx-section">Entre clips</div>
@@ -245,6 +292,7 @@
 
     [effects, transitions].forEach(tab => {
       tab.querySelectorAll('.fx-card').forEach(paintStill);
+      renderPixelSamples(tab);
       tab.addEventListener('click', e => {
         const c = e.target.closest('.fx-card');
         if (c) applyCard(c.dataset.kind, c.dataset.id, targetClips());
@@ -272,7 +320,17 @@
       if (status) status.textContent = 'Selecione um clip na timeline para aplicar';
       return;
     }
+    if (kind === 'pixel') {
+      const media = clips.filter(c => ['video', 'image'].includes(st().templates.find(t => t.id === c.templateId)?.type));
+      if (!media.length) {
+        const status = document.getElementById('mbStatus');
+        if (status) status.textContent = 'Efeitos de pixel funcionam em clips de vídeo e imagem';
+        return;
+      }
+      clips = media;
+    }
     updateFx(clips, fx => {
+      if (kind === 'pixel') fx.pixel = { ...(fx.pixel || {}), type: id, amount: fx.pixel?.amount ?? 0.5 };
       if (kind === 'look') fx.look = id;
       if (kind === 'motion') fx.motion = { type: id, strength: fx.motion?.strength || 1 };
       if (kind === 'in' || kind === 'out' || kind === 'transition') {
@@ -301,6 +359,30 @@
       // Entrada: começa em 0; saída: termina no fim do loop
       paint(solo, FX().style({ start: kind === 'out' ? -0.4 : 0.2, duration: 1.2, fx }, t));
     }
+  }
+
+  /**
+   * Amostra dos cards de pixel: o próprio media-fx.js sobre a imagem de
+   * exemplo, uma vez, guardada como imagem (sem deixar contextos WebGL abertos).
+   */
+  function renderPixelSamples(root) {
+    const imgs = root.querySelectorAll('img.fx-pixel-sample');
+    if (!imgs.length || !window.MediaFX) return;
+    const source = new Image(320, 200);
+    source.onload = () => {
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:-10000px;top:0;width:320px;height:200px;';
+      document.body.appendChild(host);
+      imgs.forEach(img => {
+        const fx = window.MediaFX.attach(source, host);
+        if (!fx) return;
+        fx.set({ effect: img.dataset.pixel, amount: img.dataset.pixel === 'glitch' ? 0.9 : 0.55 });
+        if (fx.render(0.42)) img.src = fx.canvas.toDataURL('image/png');
+        fx.destroy();
+      });
+      host.remove();
+    };
+    source.src = SAMPLE;
   }
 
   function paintStill(c) {

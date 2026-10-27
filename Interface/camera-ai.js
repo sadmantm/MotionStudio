@@ -109,7 +109,8 @@
         resolve(f);
       }, { once: true });
       // O preview serve os clips com <base href="/"> (imagens e fontes do projeto resolvem do mesmo jeito)
-      f.srcdoc = /<base[\s>]/i.test(html) ? html : /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, m => `${m}<base href="/">`) : `<base href="/">${html}`;
+      const withKit = window.ClipHost ? window.ClipHost.injectRuntime(html) : html;
+      f.srcdoc = /<base[\s>]/i.test(withKit) ? withKit : /<head[^>]*>/i.test(withKit) ? withKit.replace(/<head[^>]*>/i, m => `${m}<base href="/">`) : `<base href="/">${withKit}`;
       document.body.appendChild(f);
     });
   }

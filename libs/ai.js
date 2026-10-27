@@ -17,6 +17,13 @@
 
   const HISTORY_KEY = 'motionStudio.ai.history';
   const HISTORY_MAX = 30;
+  const LIBS_KEY    = 'ms.aiLibs';
+  // [id, nome, descrição] — mesmos ids de libs/motion-libs.js
+  const MOTION_LIBS = [
+    ['gsap',    'GSAP',     'timelines, SplitText, traços e morph SVG'],
+    ['three',   'Three.js', 'camada 3D, partículas, bloom'],
+    ['onetake', 'OneTake',  'take contínuo: câmera única, sem cortes'],
+  ];
   const MAX_LINES   = 5;
 
   // #region Helpers de ambiente
@@ -88,6 +95,10 @@
   .ai-bar-sfx:hover { color: var(--text, #dcdce8); border-color: var(--border3, #3e3e4e); }
   .ai-bar-sfx[aria-pressed="true"] { color: var(--accent, #82ea00); border-color: rgba(130,234,0,.35); background: var(--accent-dim, rgba(130,234,0,.1)); }
   .ai-bar-sfx:focus-visible { outline: 2px solid var(--accent, #82ea00); outline-offset: 1px; }
+  .ai-bar-libs { color: var(--accent, #82ea00); border-color: rgba(130,234,0,.35); background: var(--accent-dim, rgba(130,234,0,.1)); max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+  .ai-bar-libs[hidden] { display: none; }
+  .ai-bar-libopts { display: grid; gap: 5px; }
+  .ai-bar-libopts small { color: var(--text-muted, #6e6e84); font-size: 10.5px; }
   .ai-bar-input {
     flex: 1; min-width: 0; resize: none; border: 0; outline: 0; background: transparent;
     color: var(--text, #dcdce8); font: 400 13.5px/20px 'Inter', system-ui, sans-serif;
@@ -190,6 +201,7 @@
         <span class="ai-bar-icon" aria-hidden="true">${ICON_SPARK}</span>
         <button type="button" class="ai-bar-mode" title="Alternar modo (Tab)">Novo clipe</button>
         <button type="button" class="ai-bar-sfx" aria-pressed="false" title="Efeitos sonoros: a IA cria sons sincronizados com a animação, numa faixa de áudio abaixo do clipe">🔊 Sons</button>
+        <button type="button" class="ai-bar-sfx ai-bar-libs" hidden title="Bibliotecas preferidas da IA (alterar nas configurações)"></button>
         <textarea class="ai-bar-input" rows="1" spellcheck="false" aria-label="Descreva o clipe"
           placeholder="Descreva o clipe que você quer…"></textarea>
         <button type="button" class="ai-bar-btn ai-bar-gear" title="Configurações da IA" aria-label="Configurações da IA">${ICON_GEAR}</button>
@@ -211,6 +223,11 @@
           <select id="aiBarModel" class="ai-bar-field ai-bar-model"><option value="">Automático</option></select>
         </div>
         <label class="ai-bar-check"><input type="checkbox" class="ai-bar-rotate" checked> Trocar de modelo automaticamente quando a cota/limite estourar</label>
+        <label>Bibliotecas preferidas nas animações</label>
+        <div class="ai-bar-libopts">
+          ${MOTION_LIBS.map(([id, name, desc]) => `<label class="ai-bar-check"><input type="checkbox" class="ai-bar-lib" value="${id}"> ${name} <small>— ${desc}</small></label>`).join('')}
+        </div>
+        <div class="ai-bar-note">Nenhuma marcada: a IA escolhe livremente. Vale também para "Gerar cenas com IA".</div>
         <div class="ai-bar-note ai-bar-rotation"></div>
         <div class="ai-bar-note">Obter chave: <b>aistudio.google.com/apikey</b> · A chave fica salva só neste computador (config/ai.local.json).</div>
         <div class="ai-bar-note ai-bar-setmsg" aria-live="polite"></div>
@@ -239,7 +256,22 @@
       rotate:   bar.querySelector('.ai-bar-rotate'),
       rotation: bar.querySelector('.ai-bar-rotation'),
       sfx:      bar.querySelector('.ai-bar-sfx'),
+      libs:     bar.querySelector('.ai-bar-libs'),
+      libOpts:  [...bar.querySelectorAll('.ai-bar-lib')],
     };
+
+    // Bibliotecas preferidas: preferência deste navegador (lida também pelo ai-scenes.js)
+    S.libs = loadLibs();
+    els.libOpts.forEach(input => {
+      input.checked = S.libs.includes(input.value);
+      input.addEventListener('change', () => {
+        S.libs = els.libOpts.filter(i => i.checked).map(i => i.value);
+        try { localStorage.setItem(LIBS_KEY, JSON.stringify(S.libs)); } catch (_) { /* sem storage */ }
+        renderLibs();
+      });
+    });
+    els.libs.addEventListener('click', () => { if (els.settings.hidden) toggleSettings(); });
+    renderLibs();
 
     // Efeitos sonoros: preferência deste navegador
     try { S.sfx = localStorage.getItem('ms.aiSfx') === '1'; } catch (_) { S.sfx = false; }
@@ -273,6 +305,7 @@
   const S = {
     open: false,
     sfx: false,          // "🔊 Sons": a IA declara Motion.sfx
+    libs: [],            // bibliotecas preferidas (libs/motion-libs.js)
     mode: 'create',      // 'create' | 'edit'
     editClipId: null,
     busy: false,
@@ -287,6 +320,19 @@
     modelsLoaded: false,
     toastTimer: null,
   };
+
+  function loadLibs() {
+    try {
+      const arr = JSON.parse(localStorage.getItem(LIBS_KEY) || '[]');
+      return Array.isArray(arr) ? arr.filter(id => MOTION_LIBS.some(([known]) => known === id)) : [];
+    } catch { return []; }
+  }
+
+  function renderLibs() {
+    const names = MOTION_LIBS.filter(([id]) => S.libs.includes(id)).map(([, name]) => name);
+    els.libs.hidden = !names.length;
+    els.libs.textContent = `✦ ${names.join(' · ')}`;
+  }
 
   function loadHistory() {
     try {
@@ -707,6 +753,7 @@
           project,
           playhead,
           sfx: Boolean(S.sfx),
+          libs: S.libs,
         }),
         signal: controller.signal,
       });
@@ -907,9 +954,13 @@
     btn.addEventListener('click', e => { e.preventDefault(); toggle(); });
   }
 
-  window.__onClipAIEdit = function (clipId) {
+  window.__onClipAIEdit = function (clipId, { prompt = '' } = {}) {
     if (S.busy) { open(); setMsg('Aguarde a geração atual terminar (Esc cancela).', 'error'); return; }
     open({ mode: 'edit', clipId });
+    if (prompt) {
+      els.input.value = prompt;
+      autoGrow();
+    }
   };
 
   window.MotionAI = { open, close, toggle, isOpen: () => S.open };

@@ -144,7 +144,7 @@
           </div>
           <div class="mb-divider"></div>
           <div class="mb-item disabled">Exportar JSON do Projeto…</div>
-          <div class="mb-item disabled">Exportar Frame Atual…</div>
+          <div class="mb-item" id="mbExportFrame">Exportar Quadro Atual (PNG)…</div>
         </div>
       </div>
     </nav>
@@ -203,6 +203,7 @@
         <button class="ptab" data-tab="effects">Efeitos</button>
         <button class="ptab" data-tab="text">Texto</button>
         <button class="ptab" data-tab="transitions" title="Transições">Trans.</button>
+        <button class="ptab" data-tab="blocks" title="Overlays prontos e blocos do HyperFrames">Blocos</button>
       </div>
 
       <!-- Biblioteca de assets: montada por library.js -->
@@ -217,6 +218,9 @@
 
       <div class="panel-tab-content" id="tabtext">
       </div>
+
+      <!-- Overlays prontos + catálogo do HyperFrames: montada por blocks-panel.js -->
+      <div class="panel-tab-content" id="tabBlocks"></div>
 
       <div class="panel-tab-content" id="tabTransitions">
         <div class="coming-soon">
@@ -502,6 +506,14 @@
           </select>
         </div>
         <div class="form-group">
+          <label for="exportMotionBlur">Motion blur</label>
+          <select id="exportMotionBlur" class="prop-input full" title="Rastro de movimento como numa câmera: cada quadro mistura vários subquadros renderizados">
+            <option value="" selected>Desligado</option>
+            <option value="subtle">Sutil — renderiza 4× mais quadros</option>
+            <option value="strong">Forte — renderiza 6× mais quadros</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label for="exportWorkers">Renderização em paralelo</label>
           <select id="exportWorkers" class="prop-input full" title="Trechos do vídeo renderizados ao mesmo tempo e emendados sem recodificar">
             <option value="0" selected>Automático — usa os núcleos e a RAM livres</option>
@@ -592,7 +604,13 @@
   <script src="audio-tools.js"></script>
   <script src="audio-autocut.js"></script>
   <script src="custom-assets.js"></script>
+  <script src="blocks-panel.js"></script>
+  <script src="matting-ui.js"></script>
   <script src="clip-fx.js"></script>
+  <script src="media-fx.js"></script>
+  <script src="../libs/clip-host.js"></script>
+  <script src="../libs/clip-lint.js"></script>
+  <script src="clip-lint-ui.js"></script>
   <script src="compositor.js"></script>
   <script src="transform.js"></script>
   <script src="timeline-pro.js"></script>
@@ -632,6 +650,7 @@
   document.getElementById('mbSplitClip')?.addEventListener('click',   () => window.splitCurrentScene?.());
   document.getElementById('mbDeleteClip')?.addEventListener('click',  () => window.deleteSelectedClips?.());
   document.getElementById('mbExport')?.addEventListener('click',      () => document.getElementById('btnExport').click());
+  document.getElementById('mbExportFrame')?.addEventListener('click', () => window.runFrameExport?.());
   document.getElementById('mbZoomIn')?.addEventListener('click',      () => document.getElementById('btnPreviewZoomIn').click());
   document.getElementById('mbZoomOut')?.addEventListener('click',     () => document.getElementById('btnPreviewZoomOut').click());
   document.getElementById('mbZoomFit')?.addEventListener('click',     () => document.getElementById('btnPreviewZoomFit').click());

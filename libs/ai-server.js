@@ -22,6 +22,8 @@ const sfxLibrary = require('./sfx-library');
 const sfxOpenverse = require('./sfx-openverse');
 const { SPEC: CURVE_SPEC } = require('./curve-spec');
 const { SPEC: CAMERA_SPEC, EASES: CAMERA_EASES, normalizeCamera } = require('./camera-spec');
+const { normalizeLibs, libRules } = require('./motion-libs');
+const ClipLint = require('./clip-lint');
 
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 const MODELS_TTL_MS    = 10 * 60 * 1000;
@@ -444,8 +446,39 @@ const PATCH_FORMAT = [
   '- Nada de explicações fora dos blocos.',
 ].join('\n');
 
+/**
+ * Como o movimento deve se comportar. Regras do guia de motion do
+ * HyperFrames (docs/prompting/motion), escritas para o nosso contrato:
+ * o que chega para; só se mexe o que está vivo.
+ */
+const MOTION_PRINCIPLES = [
+  'PRINCÍPIOS DE MOVIMENTO (obrigatórios):',
+  '- Chega e para: um elemento entra, assenta e FICA PARADO. O que continua se mexendo é só o que de fato muda (número contando, barra enchendo, gráfico crescendo, cursor, interface funcionando). Nada de flutuar, "respirar", girar ou dar zoom lento só para parecer vivo — isso denuncia vídeo gerado.',
+  '- Sobreponha, não enfileire: o próximo elemento começa enquanto o anterior ainda assenta; o que acontece em sequência entra com stagger; o que já existia junto aparece junto.',
+  '- Uma ideia por movimento: combine propriedades só quando dizem a mesma coisa (subir + aparecer = chegar). Giro + zoom num texto em movimento impede a leitura.',
+  '- Peso só em objetos físicos: overshoot, quique e mola com balanço em cards, abas, ícones-objeto e personagens. NUNCA em texto, interface ou números (um contador que passa de 42 e volta mostra um número que nunca existiu): neles, desaceleração longa e suave (outExpo/outQuart).',
+  '- A câmera se move para chegar a algum lugar: ela viaja entre coisas que vivem no mesmo espaço e para quando chega. Sem push-in lento e infinito por enfeite.',
+  '- Profundidade: o que está perto anda mais rápido que o fundo (parallax em 2–3 planos). Um elemento desfocado em primeiro plano passando é o sinal mais forte de profundidade — um, não vários.',
+  '- Cena viva = ação real: se nada acontece por mais de ~2 s, dê à cena algo para fazer (a interface trabalhando, um dado chegando, a câmera indo à próxima coisa) — não um enfeite em loop.',
+  '- Transições causadas por algo na tela: a câmera atravessa um botão, um card cresce e vira a próxima tela, o fundo é inundado por outra cor enquanto o sujeito fica. Corte no meio do movimento. Nunca dissolva entre duas cenas sem relação.',
+  '- Ritmo pelo formato: vinheta/rede social dá 1–4 s a cada ideia; demonstração de produto segura um enquadramento 7–10 s enquanto a interface trabalha.',
+  '- Estilo feito à mão (stop-motion): posições que mudam em passos de 2 quadros, com a irregularidade vinda de uma semente.',
+].join('\n');
+
+/** API do libs/motion-kit.js, injetado pelo host em todo clipe */
+const MOTION_KIT_DOCS = [
+  'KIT DO MOTION STUDIO — window.MS já está carregado em todo clipe (não inclua <script> para ele). Use-o para escrever menos código e evitar bugs:',
+  '- Contrato: MS.motion({ fps, durationInSeconds, ready: async () => { /* montar DOM, SplitText, carregar modelos */ }, render: t => { /* todo o estado a partir de t */ } }) cria window.Motion (config, seek, renderFrame, whenReady); render só roda depois de ready. Escreva fps e durationInSeconds como números literais.',
+  '- Tempo: MS.seg(t, t0, t1) → progresso 0–1; MS.interpolate(t, [t0, t1, …], [v0, v1, …], { easing: MS.ease.outExpo }) (clampa nas pontas; easing pode ser um array, um por trecho; valores podem ser arrays); MS.interpolateColors(t, input, cores); MS.spring(t - t0, { stiffness: 100, damping: 10, from: 0, to: 1 }) (damping 26+ = sem balanço); MS.stagger(i, 0.08); MS.loop(t, período); MS.countUp(t, t0, t1, 1500, { prefix: "R$ ", decimals: 0 }) → texto formatado.',
+  '- MS.ease: linear e in/out/inOut × Quad, Cubic, Quart, Quint, Sine, Expo, Circ, Back (ex.: MS.ease.outQuart), outElastic, outBounce, overshoot(s), bezier(x1, y1, x2, y2), steps(n).',
+  '- Sorte e ruído com semente: MS.random("semente") → [0, 1); const r = MS.rng("estrelas"); r(); MS.noise2D(semente, x, y), MS.noise3D(semente, x, y, t) → [-1, 1]; MS.wiggle(t, { freq, amp, seed }).',
+  '- Texto: MS.fitText(texto, { width, fontFamily, fontWeight }) → font-size que cabe numa linha; MS.fitElement(el); MS.split(el, "chars" | "words" | "lines") → <span>s para animar (chame em ready, depois das fontes).',
+  '- SVG: MS.path.draw(elementoPath, p) desenha o traço até a fração p; MS.path.point(d, p) → { x, y, angle }; MS.path.morph(p, dA, dB) → d intermediário entre duas formas quaisquer; MS.shape.circle(r), rect(w, h, raio), polygon(n, r), star(pontas, ext, int) → d centrado em (0, 0).',
+  '- Som do projeto: MS.audio(t) → { level, bass, mid, treble, bands[16], beat, pulse } (0–1, já suavizado; pulse decai depois de cada batida) e MS.audio.bars(t, n) → n barras. Use quando o pedido falar em música, batida, ritmo, visualizador ou "reagir ao som". Sem áudio no projeto tudo vem 0: o clipe precisa continuar bonito assim.',
+].join('\n');
+
 /** spec vazia: o HTML de referência no pedido já demonstra o contrato (cenas encadeadas) */
-function buildSystemInstruction({ spec, w, h, fps, mode = 'create' }) {
+function buildSystemInstruction({ spec, w, h, fps, mode = 'create', libs = [], scene = false }) {
   return [
     'Você é um motion designer sênior e desenvolvedor front-end que escreve UM ÚNICO clipe de vídeo autocontido para o Motion Studio (formato "Video HTML").',
     spec
@@ -464,10 +497,17 @@ function buildSystemInstruction({ spec, w, h, fps, mode = 'create' }) {
     '- WebGL pode não existir no navegador do usuário (sem aceleração por hardware): crie o renderer dentro de try/catch e, se falhar, mantenha o clipe funcionando (renderer = null; seek pula o render 3D e continua animando textos/2D). Um erro no renderer nunca pode impedir que window.Motion seja definido.',
     '- Os tokens literais do validador (window.Motion, Motion.config, seek, renderFrame, whenReady, durationInSeconds, fps, totalFrames) devem aparecer no código.',
     '- Inclua <title> com um nome curto e descritivo do clipe (2 a 5 palavras, em português).',
-    '- Nível de motion designer sênior: composição em camadas com profundidade, movimento secundário contínuo, tipografia cinética, grafismos feitos no código (SVG/canvas), easing de qualidade e entrada/saída coreografadas. Um título parado sobre fundo liso NÃO é aceitável.',
+    '- Nível de motion designer sênior: composição em camadas com profundidade, tipografia cinética, grafismos feitos no código (SVG/canvas), easing de qualidade e entrada/saída coreografadas, seguindo os PRINCÍPIOS DE MOVIMENTO abaixo. Um título sozinho sobre fundo liso NÃO é aceitável.',
+    '',
+    MOTION_PRINCIPLES,
+    '',
+    MOTION_KIT_DOCS,
+    '',
     mode === 'edit'
       ? PATCH_FORMAT
       : '- Responda SOMENTE com o documento HTML completo, começando em <!DOCTYPE html> e terminando em </html>. Sem explicações, sem markdown, sem cercas de código.',
+    // Cena encadeada usa blocos SEARCH/REPLACE, mas cria conteúdo novo
+    libRules(libs, { mode: scene ? 'create' : mode, scene }),
     ...(spec ? [
       '',
       '===== ESPECIFICAÇÃO (templates/template-ia.html) =====',
@@ -621,41 +661,17 @@ function extractHtml(text) {
   return out.trim();
 }
 
+/**
+ * Regras de libs/clip-lint.js em modo estrito (o clipe gerado TEM que trazer
+ * o contrato): erros barram o clipe e viram rodada de correção; avisos também
+ * entram na correção. Cada item leva a dica de como corrigir.
+ */
 function validateClip(html) {
-  const fatal = [];
-  const warnings = [];
-  const src = String(html || '');
-
-  // Mesmas regras de /api/motion/validate
-  if (!src.includes('window.Motion'))      fatal.push('window.Motion não encontrado');
-  if (!src.includes('Motion.config'))      fatal.push('Motion.config ausente');
-  if (!src.includes('renderFrame'))       fatal.push('renderFrame ausente');
-  if (!src.includes('seek'))              fatal.push('seek ausente');
-  if (!src.includes('whenReady'))         fatal.push('whenReady ausente');
-  if (!src.includes('durationInSeconds')) fatal.push('durationInSeconds ausente em config');
-  if (!src.includes('fps'))               fatal.push('fps ausente em config');
-  if (!src.includes('totalFrames'))       fatal.push('totalFrames ausente em config');
-
-  if (!/<html[\s>]/i.test(src))           fatal.push('documento sem <html>');
-  else if (!/<\/html>\s*$/i.test(src))    fatal.push('documento incompleto (sem </html> no final — resposta truncada?)');
-
-  if (/\brequestAnimationFrame\s*\(/.test(src)) warnings.push('usa requestAnimationFrame (proibido: animação deve vir só de seek(t))');
-  if (/\bsetInterval\s*\(/.test(src))           warnings.push('usa setInterval (proibido)');
-  if (/\bDate\.now\s*\(/.test(src))             warnings.push('usa Date.now() (proibido)');
-  if (/\bperformance\.now\s*\(/.test(src))      warnings.push('usa performance.now() (proibido)');
-  if (/\bMath\.random\s*\(/.test(src))          warnings.push('usa Math.random() (use PRNG com seed fixa)');
-  if (/<video[\s>]/i.test(src))                 warnings.push('contém <video> (proibido)');
-  if (/<audio[\s>]/i.test(src))                 warnings.push('contém <audio> (proibido)');
-  if (/\bsetAnimationLoop\s*\(/.test(src))      warnings.push('usa renderer.setAnimationLoop (renderize dentro de seek(t))');
-  if (/new\s+THREE\.WebGLRenderer/.test(src) && !/try\s*\{[^]*?new\s+THREE\.WebGLRenderer/.test(src)) {
-    warnings.push('WebGLRenderer criado fora de try/catch (sem WebGL o clipe inteiro quebra; crie com fallback)');
-  }
-  if (/autoplay\s*:\s*true/.test(src))          warnings.push('biblioteca com autoplay:true (pause e dirija por seek(t))');
-  if (/\.getDelta\s*\(|new\s+THREE\.Clock/.test(src)) warnings.push('usa THREE.Clock/getDelta (use o t recebido em seek)');
-  if (/<script[^>]+src=["']http:\/\//i.test(src)) warnings.push('script por http:// (use https)');
-  if (/esm\.sh|skypack\.dev/i.test(src))        warnings.push('CDN esm.sh/skypack (imports absolutos quebram; use jsdelivr/unpkg)');
-
-  return { fatal, warnings, issues: [...fatal, ...warnings] };
+  const { findings } = ClipLint.lint(html, { strict: true });
+  const text = f => `${f.message} → ${f.fix}`;
+  const fatal = findings.filter(f => f.severity === 'error').map(text);
+  const warnings = findings.filter(f => f.severity === 'warning').map(text);
+  return { fatal, warnings, issues: [...fatal, ...warnings], findings };
 }
 
 /**
@@ -1691,14 +1707,14 @@ function buildScenePrompt({ scene, prompt, fps, sfx = false, sfxCatalog = '' }) 
 // Padrão de acabamento de TODAS as cenas (a 1ª e as editadas a partir dela)
 const SCENE_CRAFT = [
   'PADRÃO DE QUALIDADE (motion design profissional — cena simples é inaceitável):',
-  '- Camadas: (1) fundo vivo — gradientes da paleta, grão/textura sutil, formas ou partículas se movendo devagar, profundidade; (2) grafismos de apoio — linhas, molduras, formas geométricas, ícones SVG desenhados no código, rótulos, números, barras; (3) tipografia principal em destaque.',
-  '- Nada estático: além das entradas, mantenha movimento secundário contínuo a cena inteira (deriva lenta de câmera/zoom de 2–5%, flutuação, rotação lenta, brilho percorrendo, partículas). Nenhum elemento parado por muito tempo.',
-  '- Tipografia cinética: revele títulos por palavra ou letra (máscara/clip-path, deslize com blur, escala com overshoot) com stagger; hierarquia clara (palavra-chave enorme, apoio pequeno), pesos variados.',
+  '- Camadas: (1) fundo com profundidade — gradientes da paleta, grão/textura sutil, formas em planos diferentes; (2) grafismos de apoio — linhas, molduras, formas geométricas, ícones SVG desenhados no código, rótulos, números, barras; (3) tipografia principal em destaque.',
+  '- Movimento com propósito (PRINCÍPIOS DE MOVIMENTO): o que entra assenta e para; o que continua se mexendo é o que está mudando de verdade (contador, gráfico crescendo, interface trabalhando, a câmera indo para a próxima coisa). Nada de flutuação, rotação lenta ou zoom de enfeite.',
+  '- Tipografia cinética: revele títulos por palavra ou letra (máscara/clip-path, deslize com blur, subida com desaceleração longa) com stagger; hierarquia clara (palavra-chave enorme, apoio pequeno), pesos variados. Sem overshoot em texto.',
   '- Ritmo: um acontecimento visual a cada frase ou palavra-chave da fala (novo elemento, troca de destaque, número contando, ícone desenhando o traço com stroke-dashoffset).',
   '- Técnica certa para o conteúdo: números → contador animado e/ou gráfico (barras, linhas, anéis de progresso); etapas → cards ou linha do tempo que se constrói; conceitos → ícone/ilustração SVG; comparação → split screen; produto/tecnologia → mockup de interface.',
-  '- Acabamento: sombras suaves, glow nos acentos, desfoque nas camadas de trás, blend modes, bordas finas, espaçamento consistente; easing expo/back (elastic com moderação); entradas escalonadas e saída coreografada no fim (não só fade).',
+  '- Acabamento: sombras suaves, glow nos acentos, desfoque nas camadas de trás, blend modes, bordas finas, espaçamento consistente; easing expo/quart (back e elastic só em objetos com peso); entradas sobrepostas (o próximo começa antes do anterior assentar) e saída coreografada no fim (não só fade).',
   '- Mínimo por cena: 3 camadas, 8 ou mais elementos animados em tempos diferentes e ao menos 1 grafismo SVG ou canvas feito no código.',
-  '- Evite: título centralizado sozinho sobre fundo liso, bullets simples, emojis como ícones, texto demais, elementos que entram e ficam parados.',
+  '- Evite: título centralizado sozinho sobre fundo liso, bullets simples, emojis como ícones, texto demais, cena morta (mais de ~2 s sem nenhuma ação real) e movimento de enfeite em loop.',
 ].join('\n');
 
 // A âncora vira o ponto de partida das próximas: código organizado = blocos menores
@@ -1843,6 +1859,8 @@ function register(app, { root } = {}) {
     const asset = mode === 'create' && !scene ? normalizeAsset(body.asset) : null;
     const validate = asset?.kind === 'text' ? validateTextTemplate : validateClip;
     const sfx = body.sfx === true;
+    // Bibliotecas preferidas (GSAP, three.js, one take); templates de texto têm contrato próprio
+    const libs = asset?.kind === 'text' ? [] : normalizeLibs(body.libs);
 
     if (!prompt && !scene && !(asset && (asset.images.length || asset.html))) return res.status(400).json({ error: 'Escreva o que você quer no clipe.' });
     if (mode === 'edit' && !currentHtml.trim()) {
@@ -1864,7 +1882,7 @@ function register(app, { root } = {}) {
       const patchMode = mode === 'edit' || chained;
 
       const spec = chained ? '' : asset?.kind === 'text' ? loadTextSpec(root) : loadSpec(root);
-      const systemText = buildSystemInstruction({ spec, w, h, fps, mode: patchMode ? 'edit' : 'create' });
+      const systemText = buildSystemInstruction({ spec, w, h, fps, mode: patchMode ? 'edit' : 'create', libs, scene: !!scene });
       const sfxCatalog = sfx ? await sfxLibrary.promptText() : '';
       const userText = chained
         ? buildSceneContinuePrompt({ scene, previousHtml: maskedHtml, prompt, fps, sfx, sfxCatalog })

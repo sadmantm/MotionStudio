@@ -258,6 +258,7 @@
     register({ id: 'project-save', title: 'Salvar projeto agora', group: 'Projeto', keys: ['Ctrl+S'], when: hasProject, run: pc('save') });
     register({ id: 'project-home', title: 'Ir para a tela de projetos', group: 'Projeto', keys: [], when: () => Boolean(window.MSProjects), run: () => window.MSProjects.showHome() });
     register({ id: 'export', title: 'Exportar vídeo…', group: 'Projeto', keys: ['Ctrl+E'], when: hasProject, run: () => click('btnExport') });
+    register({ id: 'export-frame', title: 'Exportar quadro atual (PNG)', group: 'Projeto', when: hasProject, run: () => window.runFrameExport?.() });
 
     // Efeitos e IA
     register({ id: 'ai-scenes', title: 'Gerar cenas com IA a partir do áudio selecionado', group: 'Efeitos e IA', keys: [], keywords: 'cenas ia gemini', when: () => hasSelection() && Boolean(window.__onClipAIScenes), run: () => window.__onClipAIScenes(selectedIds()) });

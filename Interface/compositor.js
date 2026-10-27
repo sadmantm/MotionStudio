@@ -634,11 +634,12 @@ function mountClipIntoCompositor(
   }
 
   if (tmpl.type === 'video') {
+    // Proxy H.264 (HEVC/ProRes/10 bits que o navegador não toca: libs/media-proxy.js)
     return window.__Compositor
       .mountVideo(
         clip,
-        tmpl.dataUrl,
-        tmpl.mimeType
+        tmpl.proxyUrl || tmpl.dataUrl,
+        tmpl.proxyUrl ? 'video/mp4' : tmpl.mimeType
       );
   }
 
@@ -792,6 +793,8 @@ function injectClipBridge(html, clipId) {
   const CID = ${JSON.stringify(clipId)};
   window.__clipId_injected = CID;
   const post = m => window.top?.postMessage({ ...m, __clipId: CID }, '*');
+  // rAF real: o relógio virtual do motion-kit (clipes sem Motion) não pode prender o play
+  const frame = cb => ((window.MS && MS.realRequestAnimationFrame) || requestAnimationFrame)(cb);
 
   let clock = 0, playing = false, raf = null, lastTs = null;
 
@@ -831,7 +834,7 @@ function injectClipBridge(html, clipId) {
       return;
     }
     seekEngine(clock);
-    raf = requestAnimationFrame(tick);
+    raf = frame(tick);
   }
 
   window.addEventListener('message', e => {
@@ -845,7 +848,12 @@ function injectClipBridge(html, clipId) {
     if (d.type === 'PLAY') {
       if (playing) return;
       playing = true; lastTs = null;
-      raf = requestAnimationFrame(tick);
+      raf = frame(tick);
+    }
+    // Áudio do projeto para MS.audio(t) (libs/audio-analysis.js)
+    if (d.type === 'AUDIO') {
+      window.__msAudio = d.audio || null;
+      if (!playing) seekEngine(clock);
     }
     if (d.type === 'PAUSE') {
       playing = false; lastTs = null;
@@ -869,10 +877,11 @@ function injectClipBridge(html, clipId) {
 })();
 <\/script>`;
 
-  // Injeta antes de </head> ou no início
-  return html.includes('</head>')
-    ? html.replace('</head>', bridge + '</head>')
-    : bridge + html;
+  // Kit (window.MS + adaptadores) no início do <head>; o bridge antes de </head>
+  const doc = window.ClipHost ? window.ClipHost.injectRuntime(html) : html;
+  return doc.includes('</head>')
+    ? doc.replace('</head>', bridge + '</head>')
+    : bridge + doc;
 }
 // #endregion
 
@@ -1495,10 +1504,36 @@ window.__reapplyClipFx = clipId => {
   applyClipFx(entry, clip, state.time, buildTailMap(state.clips).get(clipId) || null, cams);
 };
 
+/**
+ * Efeitos de pixel e vídeo sem fundo (media-fx.js): canvas WebGL por cima da
+ * mídia, redesenhado a cada sync (no play, todo quadro). Sem efeito, sai.
+ */
+function syncMediaFx(entry, clip, t) {
+  const el = entry.iframe;
+  const tmpl = window.__appState?.templates.find(x => x.id === clip.templateId);
+  const params = window.MediaFX.paramsFor(clip.fx, tmpl);
+  if (!params) {
+    if (entry._mfx) {
+      entry._mfx.destroy();
+      entry._mfx = null;
+      el.style.opacity = '';
+    }
+    return;
+  }
+  if (!entry._mfx) {
+    entry._mfx = window.MediaFX.attach(el, el.parentElement, { maxSide: 2048 });
+    if (!entry._mfx) return;
+  }
+  if (el.style.opacity !== '0') el.style.opacity = '0';
+  entry._mfx.set(params);
+  entry._mfx.render(Math.max(0, t - (clip.start || 0)));
+}
+
 /** Efeitos/transições do clip no tempo t, aplicados na caixa (.__tx_wrap) */
 function applyClipFx(entry, clip, t, tailFx, cams = null) {
   const wrap = entry?.iframe?.parentElement;
   if (!wrap?.classList.contains('__tx_wrap') || !window.ClipFX) return;
+  if (entry.isNative && !entry.audioOnly && window.MediaFX) syncMediaFx(entry, clip, t);
   const anim = window.ClipKF?.hasAnim(clip) ? window.ClipKF.styleInput(clip) : null;
   // Câmera 2D, modo de mesclagem e camada de ajuste (keyframes.js: fxExtras)
   const extras = window.ClipKF ? window.ClipKF.fxExtras(clip, cams) : {};
@@ -1522,6 +1557,107 @@ function applyClipFx(entry, clip, t, tailFx, cams = null) {
   wrap.style.backdropFilter = fx?.backdropFilter || '';
   wrap.style.webkitBackdropFilter = fx?.backdropFilter || '';
 }
+// #endregion
+
+// #region Áudio do projeto para clipes que reagem ao som (MS.audio)
+/**
+ * Clipes HTML que usam MS.audio(t) recebem a análise do áudio do projeto
+ * (/api/audio/spectrum, a mesma do export) e o mapa tempo-do-clipe →
+ * timeline. Refeita quando as faixas de som mudam (checagem a cada 2 s,
+ * só enquanto há clipe reativo no projeto).
+ */
+const ProjectAudio = (() => {
+  let data = null;
+  let sig = '';
+  let mapSig = '';
+  let inflight = null;
+  let timer = null;
+
+  const usesAudio = html => /\bMS\.audio\b/.test(html || '');
+  const templateOf = (state, clip) => state.templates.find(t => t.id === clip.templateId);
+
+  function reactiveClips(state) {
+    return state.clips.filter(c => {
+      const t = templateOf(state, c);
+      return t?.type === 'html' && !c.isText && usesAudio(t.html);
+    });
+  }
+
+  function sources(state) {
+    return state.clips.map(c => {
+      const t = templateOf(state, c);
+      if (!t || (t.type !== 'audio' && t.type !== 'video') || !(Number(c.volume ?? 1) > 0)) return null;
+      const url = t.mediaUrl || t.dataUrl || '';
+      if (!/^\/(?!\/)|^https?:/i.test(url)) return null;   // blob:/data: ainda não enviados ao projeto
+      return { url, start: c.start || 0, trimStart: c.trimStart || 0, duration: c.duration, volume: c.volume ?? 1 };
+    }).filter(Boolean);
+  }
+
+  function mapFor(state, clip) {
+    const tmpl = templateOf(state, clip);
+    const sourceIn = Number(clip.trimStart) || 0;
+    let scale = 1;
+    if (clip.fitAnimationToClip && tmpl?.type === 'html' && !clip.isText) {
+      const srcDur = Number(tmpl.sourceDuration) || Number(clip.trimEnd) || clip.duration;
+      const sourceOut = Math.max(sourceIn, Number(clip.trimEnd) || srcDur);
+      if (sourceOut > sourceIn) scale = clip.duration / (sourceOut - sourceIn);
+    }
+    return { offset: clip.start || 0, sourceIn, scale };
+  }
+
+  function push(clipId) {
+    const state = window.__appState;
+    const clip = state?.clips.find(c => c.id === clipId);
+    if (!clip || !data) return;
+    const tmpl = templateOf(state, clip);
+    if (!usesAudio(tmpl?.html)) return;
+    Compositor.send(clipId, { type: 'AUDIO', audio: { ...data, map: mapFor(state, clip) } });
+  }
+
+  function check() {
+    const state = window.__appState;
+    if (!state?.project) return;
+    const reactive = reactiveClips(state);
+    if (!reactive.length) { clearInterval(timer); timer = null; return; }
+    const list = sources(state);
+    const duration = Math.max(0.1, ...state.clips.map(c => (c.start || 0) + (c.duration || 0)));
+    // Clipe reativo movido/aparado: só reenvia o mapa (a análise é a mesma)
+    const maps = JSON.stringify(reactive.map(c => [c.id, mapFor(state, c)]));
+    if (maps !== mapSig) {
+      mapSig = maps;
+      if (data) reactive.forEach(c => push(c.id));
+    }
+    const next = JSON.stringify([list, state.project.fps, Math.ceil(duration)]);
+    if (next === sig) return;
+    sig = next;
+    if (!list.length) { data = null; return; }
+    const request = fetch('/api/audio/spectrum', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sources: list, fps: state.project.fps || 30, duration }),
+    }).then(r => (r.ok ? r.json() : null)).then(res => {
+      if (inflight !== request) return;
+      data = res?.audio || null;
+      reactiveClips(window.__appState).forEach(c => push(c.id));
+    }).catch(() => {});
+    inflight = request;
+  }
+
+  return {
+    /** Clipe montado e pronto: manda o áudio (e liga a checagem periódica) */
+    ready(clipId) {
+      const state = window.__appState;
+      const clip = state?.clips.find(c => c.id === clipId);
+      const tmpl = clip && templateOf(state, clip);
+      if (!usesAudio(tmpl?.html)) return;
+      if (!timer) timer = setInterval(check, 2000);
+      check();
+      push(clipId);
+    },
+    usesAudio,
+  };
+})();
+window.__ProjectAudio = ProjectAudio;
 // #endregion
 
 // #region Mensagens dos iframes → app
@@ -1564,6 +1700,7 @@ window.addEventListener('message', e => {
     Compositor.markReady(clipId);
     const state = window.__appState;
     if (state) syncCompositorToTime(state.time);
+    ProjectAudio.ready(clipId);
   }
 
   if (d.type === 'CFG' && d.duration) {
@@ -1608,7 +1745,7 @@ window.remountClip = function remountClip(clipId) {
   if (!tmpl) return;
 
   if (tmpl.type === 'video') {
-    Compositor.mountVideo(clip, tmpl.dataUrl, tmpl.mimeType);
+    Compositor.mountVideo(clip, tmpl.proxyUrl || tmpl.dataUrl, tmpl.proxyUrl ? 'video/mp4' : tmpl.mimeType);
   } else if (tmpl.type === 'audio') {
     Compositor.mountAudio(clip, tmpl.dataUrl, tmpl.mimeType);
   } else if (tmpl.type === 'image') {

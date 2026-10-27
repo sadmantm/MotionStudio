@@ -20,9 +20,9 @@
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
-const zlib = require('zlib');
 const cp   = require('child_process');
 const { pipeline } = require('stream/promises');
+const { fetchFfmpeg, FFMPEG_VERSION } = require('./ffmpeg');
 
 const ROOT      = path.resolve(__dirname, '..');
 const DIST      = path.join(ROOT, 'dist');
@@ -32,14 +32,13 @@ const BUNDLE_ID = 'com.netvale.motionstudio';
 const VERSION   = require(path.join(ROOT, 'package.json')).version || '1.0.0';
 const NODE_VER  = process.version;              // o blob SEA precisa da MESMA versão do Node
 const CHROME_BUILD = '119.0.6029.0';            // versão fixada pelo web-video-creator
-const FFMPEG_RELEASE = 'b6.1.1';                // ffmpeg-static
 const PYTHON_MINOR = '3.12';                    // há wheels do CTranslate2 para os 3 alvos
 const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 
 const TARGETS = {
-  'mac-x64':   { os: 'mac', arch: 'x64',   node: 'darwin-x64',  ffmpeg: 'darwin-x64',  probe: ['darwin', 'x64'],   chrome: 'mac',     python: 'x86_64-apple-darwin' },
-  'mac-arm64': { os: 'mac', arch: 'arm64', node: 'darwin-arm64', ffmpeg: 'darwin-arm64', probe: ['darwin', 'arm64'], chrome: 'mac_arm', python: 'aarch64-apple-darwin' },
-  'win-x64':   { os: 'win', arch: 'x64',   node: 'win-x64',     ffmpeg: 'win32-x64',   probe: ['win32', 'x64'],    chrome: 'win64',   python: 'x86_64-pc-windows-msvc' },
+  'mac-x64':   { os: 'mac', arch: 'x64',   node: 'darwin-x64',  ffmpeg: 'darwin-x64',   chrome: 'mac',     python: 'x86_64-apple-darwin' },
+  'mac-arm64': { os: 'mac', arch: 'arm64', node: 'darwin-arm64', ffmpeg: 'darwin-arm64', chrome: 'mac_arm', python: 'aarch64-apple-darwin' },
+  'win-x64':   { os: 'win', arch: 'x64',   node: 'win-x64',     ffmpeg: 'win32-x64',    chrome: 'win64',   python: 'x86_64-pc-windows-msvc' },
 };
 
 // Arquivos do projeto que vão no app (o resto — models/, venv, config com a
@@ -116,23 +115,6 @@ async function nodeBinary(t) {
   return bin;
 }
 
-/** ffmpeg da plataforma (o de node_modules é o da máquina que instalou) */
-async function ffmpegBinary(t) {
-  const hostKey = `${process.platform}-${process.arch}`;
-  const local = path.join(ROOT, 'node_modules', 'ffmpeg-static', t.os === 'win' ? 'ffmpeg.exe' : 'ffmpeg');
-  if (hostKey === t.ffmpeg && fs.existsSync(local)) return local;
-  const out = path.join(CACHE, `ffmpeg-${FFMPEG_RELEASE}-${t.ffmpeg}`, t.os === 'win' ? 'ffmpeg.exe' : 'ffmpeg');
-  if (fs.existsSync(out)) return out;
-  const gz = await download(
-    `https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_RELEASE}/ffmpeg-${t.ffmpeg}.gz`,
-    path.join(CACHE, `ffmpeg-${FFMPEG_RELEASE}-${t.ffmpeg}.gz`)
-  );
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  await pipeline(fs.createReadStream(gz), zlib.createGunzip(), fs.createWriteStream(out));
-  fs.chmodSync(out, 0o755);
-  return out;
-}
-
 /** Chrome do web-video-creator: usa o .bin do projeto ou baixa para o cache */
 async function chromeDir(t) {
   const name = `${t.chrome}-${CHROME_BUILD}`;
@@ -186,19 +168,15 @@ async function stageApp(t, appDir) {
       if (SKIP_NAMES.has(rel[rel.length - 1])) return false;
       // Ferramentas de build não vão no app
       if (['postject', 'resedit', 'pe-library', '.cache'].includes(rel[0])) return false;
-      // ffprobe-static traz todas as plataformas: fica só a do alvo
-      if (rel[0] === 'ffprobe-static' && rel[1] === 'bin' && rel.length >= 3) {
-        if (rel[2] !== t.probe[0]) return false;
-        if (rel.length >= 4 && rel[3] !== t.probe[1]) return false;
-      }
-      // ffmpeg-static: o binário da plataforma entra abaixo
+      // Binários antigos do ffmpeg-static (6.1) e ffprobe-static (4.0): o app usa .bin/ffmpeg
+      if (rel[0] === 'ffprobe-static' && rel[1] === 'bin' && rel.length >= 3) return false;
       if (rel[0] === 'ffmpeg-static' && /^ffmpeg(\.exe)?$/.test(rel[1] || '')) return false;
       return true;
     },
   });
-  const ffmpeg = await ffmpegBinary(t);
-  fs.copyFileSync(ffmpeg, path.join(nm, 'ffmpeg-static', path.basename(ffmpeg)));
-  fs.chmodSync(path.join(nm, 'ffmpeg-static', path.basename(ffmpeg)), 0o755);
+
+  log(`FFmpeg ${FFMPEG_VERSION} (${t.ffmpeg})…`);
+  await fetchFfmpeg(t.ffmpeg, path.join(appDir, '.bin', 'ffmpeg'));
 
   log('copiando o Chrome do export…');
   copy(await chromeDir(t), path.join(appDir, '.bin', 'chrome', `${t.chrome}-${CHROME_BUILD}`));
@@ -288,8 +266,8 @@ function resizeIcon(size, out) {
   if (IS_MAC_HOST) {
     run('sips', ['-z', String(size), String(size), src, '--out', out], { stdio: 'ignore' });
   } else {
-    const ffmpeg = require(path.join(ROOT, 'node_modules', 'ffmpeg-static'));
-    run(ffmpeg, ['-v', 'error', '-y', '-i', src, '-vf', `scale=${size}:${size}:flags=lanczos`, '-pix_fmt', 'rgba', out], { stdio: 'ignore' });
+    const { ffmpegPath } = require(path.join(ROOT, 'libs', 'ffmpeg-bin'));
+    run(ffmpegPath(), ['-v', 'error', '-y', '-i', src, '-vf', `scale=${size}:${size}:flags=lanczos`, '-pix_fmt', 'rgba', out], { stdio: 'ignore' });
   }
 }
 

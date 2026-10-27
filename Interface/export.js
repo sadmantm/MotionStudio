@@ -276,6 +276,10 @@ async function buildClipForExport(
     fx:
       clip.fx || null,
 
+    // Vídeo sem fundo: cor | alpha lado a lado (media-fx.js desempacota)
+    alphaPacked:
+      tmpl.alphaPacked || null,
+
     tx:
       clip._tx || null,
 
@@ -335,11 +339,13 @@ async function buildClipForExport(
     return entry;
   }
 
+  // Vídeo com proxy (HEVC/ProRes…): o Chrome do export decodifica a cópia H.264
+  const useProxy = tmpl.type === 'video' && tmpl.proxyUrl;
   entry.uploadId =
     await uploadMediaForExport(
-      tmpl.dataUrl,
+      useProxy ? tmpl.proxyUrl : tmpl.dataUrl,
       clip,
-      tmpl.mimeType
+      useProxy ? 'video/mp4' : tmpl.mimeType
     );
 
   return entry;
@@ -357,6 +363,53 @@ async function blobUrlToDataUri(url) {
     fr.readAsDataURL(blob);
   });
 }
+// #endregion
+
+// #region Quadro atual em PNG
+/**
+ * Exporta o quadro do playhead em PNG, na resolução do projeto, pela mesma
+ * cena do export (efeitos, textos e clipes HTML idênticos ao vídeo).
+ */
+window.runFrameExport = async function runFrameExport() {
+  const state = window.__appState;
+  if (!state?.clips?.length) {
+    window.MSUI?.toast?.({ message: 'Nenhum clip no projeto.', kind: 'error' });
+    return;
+  }
+  const fps = Number(state.project?.fps) || 30;
+  const res = state.project?.res || { w: 1080, h: 1920 };
+  const time = Number(state.time) || 0;
+  const task = window.MSUI?.task({ title: 'Exportando quadro (PNG)', detail: 'Preparando…', progress: null });
+  try {
+    const clips = [];
+    for (const clip of state.clips) {
+      const entry = await buildClipForExport(clip, state.templates || [], state.tracks || [], fps);
+      if (entry) clips.push(entry);
+    }
+    const tails = window.__buildTailMap?.(state.clips) || new Map();
+    clips.forEach(entry => { entry.tailFx = tails.get(entry.id) || null; });
+    task?.update({ detail: `Renderizando o quadro em ${time.toFixed(2)} s…` });
+    const r = await fetch(`${EXPORT_SERVER}/api/export/frame`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clips, time, fps, width: res.w, height: res.h, projectRes: res, background: state.project?.background || '#000000' }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    const blob = await r.blob();
+    const at = Number(r.headers.get('X-Frame-Time')) || time;
+    const stamp = `${String(Math.floor(at / 60)).padStart(2, '0')}m${(at % 60).toFixed(2).padStart(5, '0').replace('.', 's')}`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(state.project?.name || 'quadro').replace(/[\\/:*?"<>|]+/g, '-')}-${stamp}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    task?.done(`Quadro salvo (${res.w}×${res.h})`);
+  } catch (err) {
+    task?.fail(err.message);
+  }
+};
 // #endregion
 
 // #region Execução do Export
@@ -445,6 +498,13 @@ window.runExport = async function runExport() {
     return;
   }
 
+  // Diagnóstico dos clipes HTML (libs/clip-lint.js): erro pede confirmação
+  if (window.MSLint && !(await window.MSLint.checkBeforeExport())) {
+    setProgress(0, '❌ Export cancelado para corrigir os clipes com erro.');
+    setExportBusy(false);
+    return;
+  }
+
   setProgress(2, `Enviando ${clipsForExport.length} clip(s) para o servidor…`);
 
   // ── 3. Inicia o job ───────────────────────────────────────
@@ -460,6 +520,7 @@ window.runExport = async function runExport() {
         workersPerScene: workers,
         quality: document.getElementById('exportQuality')?.value || 'high',
         background: state?.project?.background || '#000000',
+        motionBlur: document.getElementById('exportMotionBlur')?.value || null,
       }),
     });
     if (!r.ok) throw new Error(await r.text());

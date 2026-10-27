@@ -57,6 +57,11 @@
   function loadPrefs() {
     try { return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') || {}; } catch (_) { return {}; }
   }
+  /** Preferência da barra de IA (libs/ai.js) enquanto o formulário não tem a própria */
+  function barLibs() {
+    try { const arr = JSON.parse(localStorage.getItem('ms.aiLibs') || '[]'); return Array.isArray(arr) ? arr : []; } catch (_) { return []; }
+  }
+
   function savePrefs(prefs) {
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (_) { /* sem storage */ }
   }
@@ -280,6 +285,12 @@
               <input type="checkbox" id="scSfx">
               <span><b>🔊 Efeitos sonoros</b> — a IA cria sons sincronizados com cada cena (whoosh, impacto, pop…) numa faixa de áudio abaixo das cenas</span>
             </label>
+            <div class="sc-libs">
+              <span class="sc-libs-title">Bibliotecas preferidas <small>nenhuma = a IA escolhe</small></span>
+              <label class="sc-check"><input type="checkbox" class="sc-lib" value="gsap"><span><b>GSAP</b> — timelines, texto por letra/palavra, traços e morph SVG</span></label>
+              <label class="sc-check"><input type="checkbox" class="sc-lib" value="three"><span><b>Three.js</b> — camada 3D, partículas e bloom</span></label>
+              <label class="sc-check"><input type="checkbox" class="sc-lib" value="onetake"><span><b>OneTake</b> — take contínuo: uma câmera só, cada cena nasce da anterior</span></label>
+            </div>
           </section>
 
           <section class="sc-run" hidden>
@@ -390,6 +401,8 @@
     $q('#scBackground').value = prefs.background || (hasVideo ? 'transparent' : 'full');
     $q('#scLang').value = prefs.language ?? 'pt';
     $q('#scSfx').checked = Boolean(prefs.sfx);
+    const libs = Array.isArray(prefs.libs) ? prefs.libs : barLibs();
+    els.modal.querySelectorAll('.sc-lib').forEach(input => { input.checked = libs.includes(input.value); });
     setStyleMode(prefs.styleMode || 'auto');
 
     $q('#scSource').textContent = sources.length > 1
@@ -477,6 +490,7 @@
       background:  $q('#scBackground').value,
       language:    $q('#scLang').value,
       sfx:         $q('#scSfx').checked,
+      libs:        [...els.modal.querySelectorAll('.sc-lib')].filter(i => i.checked).map(i => i.value),
     };
   }
 
@@ -662,6 +676,7 @@
         name: scene.title,
         project: job.project,
         sfx: Boolean(job.form.sfx),
+        libs: Array.isArray(job.form.libs) ? job.form.libs : [],
         model: job.model || undefined,
         scene: {
           index: scene.index,

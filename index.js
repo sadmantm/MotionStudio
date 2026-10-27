@@ -6,7 +6,7 @@ const cors    = require('cors');
 const path    = require('path');
 const os      = require('os');
 const fs      = require('fs');
-const { renderJob, getJob, createJob, downloadJob, cleanupJob, setProjectRoot, registerExportMediaRoutes } = require('./exporter');
+const { renderJob, renderStill, getJob, createJob, downloadJob, cleanupJob, setProjectRoot, registerExportMediaRoutes } = require('./exporter');
 setProjectRoot(__dirname);
 
 // #endregion
@@ -320,7 +320,14 @@ require('./libs/sfx-library').register(app);
 require('./libs/sfx-openverse').register(app);
 require('./libs/curve-spec').register(app);
 require('./libs/camera-spec').register(app);
-require('./libs/projects').register(app, { root: __dirname });
+const projectsApi = require('./libs/projects').register(app, { root: __dirname });
+
+// Remover fundo de vídeo/imagem (libs/matting.js): Python do ambiente do Whisper
+require('./libs/matting').register(app, {
+  projects: projectsApi,
+  python: () => (fs.existsSync(PY_ENV_BIN) ? { path: PY_ENV_BIN, managed: true } : whisper.python ? { path: whisper.python, managed: false } : null),
+  modelsDir: process.env.WHISPER_MODELS_DIR || path.join(__dirname, 'models'),
+});
 // Efeitos, transições e textos criados pelo usuário (colar HTML ou IA)
 require('./libs/custom-assets').register(app, { root: __dirname, ...require('./libs/ai-server')._internal });
 
@@ -330,6 +337,7 @@ require('./libs/custom-assets').register(app, { root: __dirname, ...require('./l
 // Conteúdo endereçado por hash (sha1) — o mesmo HTML não é reenviado.
 const crypto = require('crypto');
 const htmlThumbs = require('./libs/html-thumbs');
+const ClipHost = require('./libs/clip-host');
 const previewClips = new Map();          // hash → html (LRU simples)
 const PREVIEW_CLIPS_MAX = 300;
 
@@ -418,7 +426,7 @@ app.post('/api/thumbs/html', async (req, res) => {
   // Mesma rota do preview isolado: <base href="/"> resolve os assets do projeto
   const id = crypto.createHash('sha1').update(html).digest('hex');
   previewClips.delete(id);
-  previewClips.set(id, html);
+  previewClips.set(id, ClipHost.injectRuntime(html));
   if (previewClips.size > PREVIEW_CLIPS_MAX) previewClips.delete(previewClips.keys().next().value);
 
   try {
@@ -467,21 +475,20 @@ app.get('/api/health', (_, res) => res.json({ ok: true, cpus: os.cpus().length }
 // #endregion
 
 // #region Rotas — Validação de Template
+/**
+ * POST /api/motion/validate { html, strict? } → diagnóstico do clipe (libs/clip-lint.js).
+ * valid = sem erros; issues = mensagens (compatível com o formato antigo).
+ */
+const ClipLint = require('./libs/clip-lint');
 app.post('/api/motion/validate', (req, res) => {
-  const { html } = req.body || {};
+  const { html, strict } = req.body || {};
   if (!html) return res.status(400).json({ valid: false, issues: ['HTML não fornecido'] });
-
-  const issues = [];
-  if (!html.includes('window.Motion'))      issues.push('window.Motion não encontrado');
-  if (!html.includes('Motion.config'))      issues.push('Motion.config ausente');
-  if (!html.includes('renderFrame'))        issues.push('renderFrame ausente');
-  if (!html.includes('seek'))              issues.push('seek ausente');
-  if (!html.includes('whenReady'))         issues.push('whenReady ausente');
-  if (!html.includes('durationInSeconds')) issues.push('durationInSeconds ausente em config');
-  if (!html.includes('fps'))              issues.push('fps ausente em config');
-  if (!html.includes('totalFrames'))       issues.push('totalFrames ausente em config');
-
-  res.json({ valid: issues.length === 0, issues });
+  const result = ClipLint.lint(html, { strict: Boolean(strict) });
+  res.json({
+    valid: result.ok,
+    issues: result.findings.filter(f => f.severity !== 'info').map(f => f.message),
+    ...result,
+  });
 });
 // #endregion
 
@@ -491,7 +498,7 @@ app.post('/api/motion/validate', (req, res) => {
  * Body: { scenes, fps, format, width, height, workersPerScene }
  */
 app.post('/api/export/start', async (req, res) => {
-  const { clips, fps, format, width, height, projectRes, workersPerScene, quality, background } = req.body || {};
+  const { clips, fps, format, width, height, projectRes, workersPerScene, quality, background, motionBlur } = req.body || {};
 
   if (!Array.isArray(clips) || clips.length === 0)
     return res.status(400).json({ error: 'clips[] é obrigatório e não pode estar vazio' });
@@ -515,8 +522,35 @@ app.post('/api/export/start', async (req, res) => {
       workersPerScene,
       quality: ['normal', 'high', 'max'].includes(quality) ? quality : 'high',
       background: /^#[0-9a-f]{6}$/i.test(background || '') ? background : '#000000',
+      motionBlur: ['subtle', 'strong'].includes(motionBlur) ? motionBlur : null,
     }).catch(err => console.error(`[Job ${jobId}] Falha fatal:`, err.message))
   );
+});
+
+/**
+ * POST /api/export/frame { clips, time, fps, width, height, projectRes, background }
+ * → PNG do quadro em `time` (mesma cena do export, capturada sem encoder).
+ */
+app.post('/api/export/frame', async (req, res) => {
+  const { clips, time, fps, width, height, projectRes, background } = req.body || {};
+  if (!Array.isArray(clips) || !clips.length) return res.status(400).json({ error: 'clips[] é obrigatório' });
+  const safeW = Number.isFinite(+width) && +width > 0 ? Math.min(+width, 7680) : 1920;
+  const safeH = Number.isFinite(+height) && +height > 0 ? Math.min(+height, 7680) : 1080;
+  try {
+    const { png, time: at } = await renderStill(clips, {
+      time: +time || 0,
+      fps: Number.isFinite(+fps) && +fps > 0 ? Math.min(+fps, 120) : 30,
+      width: safeW, height: safeH,
+      projectRes: projectRes && +projectRes.w > 0 && +projectRes.h > 0 ? { w: +projectRes.w, h: +projectRes.h } : { w: safeW, h: safeH },
+      background: /^#[0-9a-f]{6}$/i.test(background || '') ? background : '#000000',
+    });
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('X-Frame-Time', String(at));
+    res.end(png);
+  } catch (err) {
+    console.error('[Frame] Falha:', err.message);
+    res.status(500).json({ error: `Não foi possível exportar o quadro: ${err.message}` });
+  }
 });
 
 app.get('/api/export/status/:id', (req, res) => {
@@ -586,13 +620,7 @@ function proxyToWhisper(endpoint, bodyObj) {
   });
 }
 
-function getFfmpegPath() {
-  try {
-    const p = process.env.FFMPEG_PATH || require('ffmpeg-static');
-    if (p && fs.existsSync(p)) return p;
-  } catch {}
-  return process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-}
+const { ffmpegPath: getFfmpegPath } = require('./libs/ffmpeg-bin');
 
 // Silêncio adicionado antes/depois da fala — estabiliza o VAD em clips curtos.
 // O Python desconta esse offset dos timestamps.
@@ -744,6 +772,31 @@ app.post('/api/audio/extract', async (req, res) => {
 
 // Velocidade, tom e redutor de ruído dos clips de áudio (libs/audio-fx.js)
 require('./libs/audio-fx').register(app, { ffmpegPath: getFfmpegPath, saveUpload });
+
+/**
+ * POST /api/audio/spectrum { sources: [{ url, start, trimStart, duration, volume }], fps, duration }
+ * → áudio do projeto por quadro para MS.audio(t) no preview (libs/audio-analysis.js).
+ * URLs do próprio servidor (/api/projects/…/media/…) são lidas pelo ffmpeg via http.
+ */
+// Catálogo de blocos do HyperFrames (libs/hyperframes-catalog.js)
+require('./libs/hyperframes-catalog').register(app);
+
+const { analyzeProjectAudio } = require('./libs/audio-analysis');
+app.post('/api/audio/spectrum', async (req, res) => {
+  const body = req.body || {};
+  const sources = (Array.isArray(body.sources) ? body.sources : []).slice(0, 60).map(s => {
+    const url = String(s?.url || '');
+    const src = /^\/(?!\/)/.test(url) ? `http://127.0.0.1:${PORT}${url}` : /^https?:\/\//i.test(url) ? url : '';
+    return src && { src, start: s.start, trimStart: s.trimStart, duration: s.duration, volume: s.volume };
+  }).filter(Boolean);
+  if (!sources.length) return res.json({ audio: null });
+  try {
+    res.json({ audio: await analyzeProjectAudio(sources, { fps: body.fps, duration: body.duration }) });
+  } catch (err) {
+    console.warn('[Audio] Análise do espectro falhou:', err.message);
+    res.status(500).json({ error: `Não foi possível analisar o áudio: ${err.message}` });
+  }
+});
 
 app.post('/api/transcribe', async (req, res) => {
   if (whisper.state !== 'ready') {

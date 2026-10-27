@@ -445,7 +445,7 @@
         } catch (_) { /* clipe sem whenReady */ }
         finish(read());
       }, { once: true });
-      iframe.srcdoc = html;
+      iframe.srcdoc = window.ClipHost ? window.ClipHost.injectRuntime(html) : html;
       document.body.appendChild(iframe);
     });
   }

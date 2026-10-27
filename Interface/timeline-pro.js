@@ -297,7 +297,8 @@ function isHtmlScene(tmpl) {
 
 function mediaInfoFor(tmpl) {
   // HTML editado (IA / editor) ou mídia trocada: refaz miniaturas e picos
-  const src = tmpl.type === 'html' ? tmpl.html : (tmpl.dataUrl || tmpl.objectUrl);
+  // Vídeo com proxy (HEVC/ProRes…): as miniaturas saem da cópia H.264
+  const src = tmpl.type === 'html' ? tmpl.html : (tmpl.proxyUrl || tmpl.dataUrl || tmpl.objectUrl);
   let info = _mediaInfo.get(tmpl.id);
   if (info && info.src !== src) info = null;
   if (!info) {
@@ -353,14 +354,17 @@ async function buildThumbnails(tmpl, info) {
   video.muted = true;
   video.preload = 'auto';
   video.playsInline = true;
-  video.src = tmpl.dataUrl || tmpl.objectUrl;
+  video.src = tmpl.proxyUrl || tmpl.dataUrl || tmpl.objectUrl;
   await waitEvent(video, 'loadeddata', 15000);
 
   const duration = video.duration;
   if (!Number.isFinite(duration) || !video.videoWidth) return;
 
   const h = 72;
-  const w = Math.max(16, Math.round(h * video.videoWidth / video.videoHeight));
+  // Vídeo sem fundo (cor | alpha lado a lado): a miniatura é só a metade da cor
+  const packed = tmpl.alphaPacked === 'sbs';
+  const srcW = packed ? video.videoWidth / 2 : video.videoWidth;
+  const w = Math.max(16, Math.round(h * srcW / video.videoHeight));
   info.aspect = w / h;
 
   const canvas = document.createElement('canvas');
@@ -375,7 +379,8 @@ async function buildThumbnails(tmpl, info) {
     const t = Math.min(duration - 0.05, i * step + step / 2);
     video.currentTime = t;
     try { await waitEvent(video, 'seeked'); } catch (_) { continue; }
-    ctx.drawImage(video, 0, 0, w, h);
+    if (packed) ctx.drawImage(video, 0, 0, srcW, video.videoHeight, 0, 0, w, h);
+    else ctx.drawImage(video, 0, 0, w, h);
     info.thumbs.push({ t, url: canvas.toDataURL('image/jpeg', 0.6) });
     if (i % 10 === 9) scheduleRenderTimeline();
   }

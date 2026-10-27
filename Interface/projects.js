@@ -134,6 +134,7 @@
       template.fileSize  = template.fileSize || out.size;
       // Mídia já no servidor: a URL de lá é a fonte (blob: continua valendo até o reload)
       if (!/^blob:/i.test(template.dataUrl || '')) template.dataUrl = out.url;
+      if (out.proxy?.needed) watchProxy(template, projectId, out.proxy);
     })().finally(() => S.uploads.delete(template.id));
     S.uploads.set(template.id, job);
     job.catch(err => {
@@ -141,6 +142,55 @@
       setSaveState('error', 'mídia não salva');
     });
     return job;
+  }
+
+  /**
+   * Proxy H.264 de vídeo que o navegador não toca (libs/media-proxy.js): o
+   * servidor gera em segundo plano; quando fica pronto o preview e o export
+   * passam a usar a cópia (template.proxyUrl) e os clips são remontados.
+   */
+  const proxyWatch = new Map();   // template.id → true
+  function watchProxy(template, projectId, first = null) {
+    if (proxyWatch.has(template.id) || template.proxyUrl) return;
+    proxyWatch.set(template.id, true);
+    const url = `${API}/${projectId}/media/${encodeURIComponent(template.mediaFile)}/proxy`;
+    const why = first?.reasons?.length ? ` (${first.reasons.join(', ')})` : '';
+    let task = null;
+    const finish = info => {
+      proxyWatch.delete(template.id);
+      if (S.id !== projectId) return;
+      template.proxyUrl = info.url;
+      template.proxyFile = decodeURIComponent(String(info.url).split('/').pop());
+      (st()?.clips || []).filter(c => c.templateId === template.id).forEach(c => window.remountClip?.(c.id));
+      window.__refreshTimelineThumbs?.();
+      S.changedAt = Date.now();
+      task?.done('Pronto: o preview já usa a cópia otimizada');
+    };
+    const tick = async () => {
+      if (S.id !== projectId) { proxyWatch.delete(template.id); task?.close(); return; }
+      try {
+        const info = await api('GET', url);
+        if (!info.needed) { proxyWatch.delete(template.id); task?.close(); return; }
+        if (info.status === 'done') return finish(info);
+        if (info.status === 'error') {
+          proxyWatch.delete(template.id);
+          (task || window.MSUI.task({ title: `Otimizando "${template.name}"` })).fail(`Falha ao converter: ${info.error || 'erro no ffmpeg'}`);
+          return;
+        }
+        task = task || window.MSUI.task({ title: `Otimizando "${template.name}" para o editor`, detail: `Convertendo para H.264${why || (info.reasons?.length ? ` (${info.reasons.join(', ')})` : '')}…`, progress: 0 });
+        task.update({ progress: info.progress || 0 });
+      } catch (_) { /* servidor ocupado: tenta de novo */ }
+      setTimeout(tick, 1500);
+    };
+    tick();
+  }
+
+  /** Projeto aberto: vídeos antigos sem proxy ganham um se precisarem */
+  function checkProxies() {
+    const projectId = S.id;
+    (st()?.templates || [])
+      .filter(t => t.type === 'video' && t.mediaFile && !t.proxyUrl)
+      .forEach(t => watchProxy(t, projectId));
   }
 
   /** Templates de mídia criados por outras partes (SFX, áudio extraído, gravação) */
@@ -321,6 +371,7 @@
       S.lastSig = signature();
       S.changedAt = 0;
       S.lastThumb = 0;   // capa no primeiro save (projeto antigo pode não ter)
+      checkProxies();
       try { localStorage.setItem(LAST_KEY, id); } catch (_) { /* sem storage */ }
       renderProjectChip();
       setSaveState('saved', 'Salvo');
@@ -359,6 +410,204 @@
     } finally {
       setHomeBusy(false);
     }
+  }
+
+  /**
+   * Arquivo .ms → projeto novo, com progresso: o arquivo sobe cru (sem
+   * JSON.parse/stringify aqui, que travavam a página com mídias grandes) e o
+   * servidor conta as mídias gravadas. Faixas da barra: envio 0–70 %,
+   * leitura no servidor 70–76 %, mídias 76–94 %, abertura 94–100 %.
+   */
+  async function importFile(file) {
+    const prog = importProgress(file);
+    try {
+      prog.phase('upload', 'Enviando arquivo…', 0, 70);
+      const meta = await postImport(file, {
+        upload: (loaded, total) => prog.set(loaded / total, `${fmtBytes(loaded)} de ${fmtBytes(total)}`),
+        uploaded: () => { prog.cancellable(false); prog.phase('media', 'Lendo o projeto…', 70, 76, { creep: true }); },
+        media: ({ done, total, name }) => {
+          if (!total) return;
+          prog.phase('media', 'Gravando mídias…', 76, 94);
+          prog.set(done / total, `${done} de ${total}${name ? ` · ${name}` : ''}`);
+        },
+      }, prog);
+      prog.phase('open', 'Abrindo projeto…', 94, 100, { creep: true });
+      await open(meta.id);
+      if (S.id !== meta.id) { prog.close(); return false; }   // open() já avisou o erro
+      await prog.finish();
+      return true;
+    } catch (err) {
+      prog.close();
+      if (!err.aborted) window.MSUI.notify(`Não foi possível importar: ${err.message}`);
+      return false;
+    }
+  }
+
+  /** POST do arquivo com progresso de envio (XHR) e leitura do NDJSON do servidor */
+  function postImport(file, hooks, prog) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API}/import?name=${encodeURIComponent(file.name.replace(/\.ms$/i, ''))}`);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Accept', 'application/x-ndjson');
+      prog.onCancel(() => xhr.abort());
+
+      let seen = 0;
+      let meta = null;
+      let error = null;
+      const readLines = () => {
+        const text = xhr.responseText || '';
+        const end = text.lastIndexOf('\n');
+        if (end < seen) return;
+        for (const line of text.slice(seen, end).split('\n')) {
+          let msg;
+          try { msg = JSON.parse(line); } catch (_) { continue; }
+          if (msg.type === 'progress') hooks.media(msg);
+          else if (msg.type === 'done') meta = msg.meta;
+          else if (msg.type === 'error') error = msg.error;
+        }
+        seen = end + 1;
+      };
+
+      xhr.upload.onprogress = e => { if (e.lengthComputable && e.total) hooks.upload(e.loaded, e.total); };
+      xhr.upload.onload = () => hooks.uploaded();
+      xhr.onprogress = readLines;
+      xhr.onload = () => {
+        if (xhr.status >= 400) {
+          let msg = '';
+          try { msg = JSON.parse(xhr.responseText).error; } catch (_) { /* página de erro do express */ }
+          if (!msg && xhr.status === 413) msg = 'arquivo grande demais.';
+          if (!msg && xhr.status === 400) msg = 'o arquivo não é um JSON válido (corrompido?).';
+          return reject(new Error(msg || `HTTP ${xhr.status}`));
+        }
+        readLines();
+        if (error) reject(new Error(error));
+        else if (meta) resolve(meta);
+        else reject(new Error('resposta incompleta do servidor.'));
+      };
+      xhr.onerror = () => reject(new Error('sem conexão com o servidor.'));
+      xhr.onabort = () => reject(Object.assign(new Error('Importação cancelada.'), { aborted: true }));
+      xhr.send(file);
+    });
+  }
+
+  /**
+   * Overlay de importação. A barra é desenhada a cada quadro e persegue o
+   * valor real com suavização; nas fases sem eventos (servidor lendo o JSON,
+   * abertura) avança sozinha devagar rumo a um teto que nunca alcança.
+   */
+  function importProgress(file) {
+    const el = document.createElement('div');
+    el.className = 'ms-import';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-labelledby', 'msImportTitle');
+    el.innerHTML = `
+      <div class="ms-import-card">
+        <div class="ms-import-head">
+          <div class="ms-import-icon" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          </div>
+          <div class="ms-import-titles">
+            <div class="ms-import-title" id="msImportTitle">Importando projeto</div>
+            <div class="ms-import-file"></div>
+          </div>
+          <div class="ms-import-pct">0%</div>
+        </div>
+        <div class="ms-import-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+        <div class="ms-import-foot">
+          <span class="ms-import-stage" aria-live="polite"></span>
+          <span class="ms-import-detail"></span>
+        </div>
+        <ol class="ms-import-steps">
+          <li data-step="upload">Envio</li>
+          <li data-step="media">Mídias</li>
+          <li data-step="open">Abertura</li>
+        </ol>
+        <button type="button" class="ms-import-cancel">Cancelar</button>
+      </div>`;
+    el.querySelector('.ms-import-file').textContent = `${file.name} · ${fmtBytes(file.size)}`;
+    document.body.appendChild(el);
+
+    const $ = sel => el.querySelector(sel);
+    const bar = $('.ms-import-bar');
+    const fill = $('.ms-import-bar i');
+    const pct = $('.ms-import-pct');
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const steps = ['upload', 'media', 'open'];
+
+    let shown = 0;         // valor desenhado
+    let target = 0;        // valor real (ou estimado) a alcançar
+    let cap = 0;           // teto da subida automática da fase atual
+    let range = [0, 0];
+    let current = '';
+    let last = performance.now();
+    let raf = 0;
+    let cancel = null;
+
+    function frame(now) {
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      if (cap > target) target += (cap - target) * (1 - Math.exp(-dt / 2.5));
+      shown = reduce ? target : shown + (target - shown) * (1 - Math.exp(-dt / 0.14));
+      if (Math.abs(target - shown) < 0.05) shown = target;
+      fill.style.transform = `scaleX(${(shown / 100).toFixed(4)})`;
+      const value = Math.floor(shown);
+      if (pct.textContent !== `${value}%`) {
+        pct.textContent = `${value}%`;
+        bar.setAttribute('aria-valuenow', String(value));
+      }
+      raf = requestAnimationFrame(frame);
+    }
+    raf = requestAnimationFrame(frame);
+    requestAnimationFrame(() => el.classList.add('is-open'));
+
+    $('.ms-import-cancel').addEventListener('click', () => cancel?.());
+
+    return {
+      /** Fase from–to (%). creep: sem eventos reais, a barra anda sozinha até ~85 % da faixa */
+      phase(step, label, from, to, { creep = false } = {}) {
+        $('.ms-import-stage').textContent = label;
+        if (step !== current) {
+          current = step;
+          $('.ms-import-detail').textContent = '';
+          steps.forEach((s, i) => {
+            const li = $(`[data-step="${s}"]`);
+            li.classList.toggle('is-done', i < steps.indexOf(step));
+            li.classList.toggle('is-active', s === step);
+          });
+        }
+        range = [from, to];
+        target = Math.max(target, from);
+        cap = creep ? from + (to - from) * 0.85 : target;
+      },
+      set(fraction, detail) {
+        const [from, to] = range;
+        target = Math.max(target, from + (to - from) * Math.min(1, Math.max(0, fraction)));
+        cap = Math.max(cap, target);
+        if (detail != null) $('.ms-import-detail').textContent = detail;
+      },
+      cancellable(on) { $('.ms-import-cancel').hidden = !on; },
+      onCancel(fn) { cancel = fn; },
+      /** Completa a barra e fecha com um breve estado de concluído */
+      async finish() {
+        target = cap = 100;
+        $('.ms-import-cancel').hidden = true;
+        $('.ms-import-stage').textContent = 'Projeto importado';
+        $('.ms-import-detail').textContent = '';
+        steps.forEach(s => { const li = $(`[data-step="${s}"]`); li.classList.remove('is-active'); li.classList.add('is-done'); });
+        const started = performance.now();
+        while (shown < 99.9 && performance.now() - started < 700) await new Promise(r => requestAnimationFrame(r));
+        el.classList.add('is-done');
+        await new Promise(r => setTimeout(r, reduce ? 150 : 450));
+        this.close();
+      },
+      close() {
+        el.classList.remove('is-open');
+        el.classList.add('is-leaving');
+        setTimeout(() => { cancelAnimationFrame(raf); el.remove(); }, reduce ? 0 : 220);
+      },
+    };
   }
 
   async function renameCurrent() {
@@ -660,7 +909,7 @@
   }
 
   window.MSProjects = {
-    showHome, hideHome, open, create, saveNow, importPayload, persistMedia,
+    showHome, hideHome, open, create, saveNow, importPayload, importFile, persistMedia,
     currentId: () => S.id,
     usage: () => (S.id ? api('GET', `${API}/${S.id}/usage`) : Promise.resolve(null)),
     cleanupMedia: () => (S.id ? saveNow().then(() => api('POST', `${API}/${S.id}/media/cleanup`)) : Promise.resolve(null)),

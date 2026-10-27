@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Starburst</title>
+<!-- Overlay do Motion Studio: raios saindo do centro do clipe (posicione a caixa do clipe sobre o assunto). -->
+<style>
+  html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: transparent; }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<svg id="svg" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Coordenadas do grupo: a origem é o centro dos raios -->
+    <radialGradient id="rg" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1000">
+      <stop offset="0" stop-opacity="1"/>
+      <stop offset="0.5" stop-opacity="0.55"/>
+      <stop offset="1" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g id="burst"></g>
+</svg>
+<script>
+  const COLOR = /*ms:color*/'#ffd166';
+  const RAYS = 18;
+  const DUR = 3;
+  const burst = document.getElementById('burst');
+  let W = 0, H = 0;
+
+  function build() {
+    W = innerWidth; H = innerHeight;
+    const R = Math.hypot(W, H) * 0.6;
+    const rg = document.getElementById('rg');
+    rg.setAttribute('r', R);
+    rg.querySelectorAll('stop').forEach(stop => stop.setAttribute('stop-color', COLOR));
+    burst.textContent = '';
+    const r = MS.rng('raios');
+    for (let i = 0; i < RAYS; i++) {
+      const a0 = (i / RAYS) * Math.PI * 2;
+      const half = (Math.PI / RAYS) * (0.35 + 0.3 * r());
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', `M 0 0 L ${Math.cos(a0 - half) * R} ${Math.sin(a0 - half) * R} L ${Math.cos(a0 + half) * R} ${Math.sin(a0 + half) * R} Z`);
+      p.setAttribute('fill', 'url(#rg)');
+      p.setAttribute('fill-opacity', (0.35 + 0.35 * r()).toFixed(2));
+      burst.appendChild(p);
+    }
+  }
+
+  MS.motion({
+    fps: 30,
+    durationInSeconds: DUR,
+    ready: build,
+    render(t) {
+      const grow = MS.interpolate(t, [0, 0.6], [0.4, 1], { easing: MS.ease.outExpo });
+      const op = MS.interpolate(t, [0, 0.35, DUR - 0.5, DUR], [0, 1, 1, 0]);
+      const spin = t * 8;   // graus: os raios giram devagar (é o próprio efeito)
+      burst.setAttribute('transform', `translate(${W / 2} ${H / 2}) rotate(${spin.toFixed(2)}) scale(${grow.toFixed(4)})`);
+      burst.style.opacity = op.toFixed(3);
+    },
+  });
+</script>
+</body>
+</html>

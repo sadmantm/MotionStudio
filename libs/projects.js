@@ -14,9 +14,11 @@
 const fs   = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const MediaProxy = require('./media-proxy');
 
 const ID_RE        = /^p_[a-z0-9]{6,32}$/;
 const MEDIA_RE     = /^[\w.-]{1,160}$/;
+const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|mts|m2ts|wmv|flv|3gp|mxf|mpg|mpeg|ts|dv|hevc)$/i;
 const THUMB_EXTS   = ['webp', 'jpg', 'png'];
 const MAX_UPLOAD   = 8 * 1024 ** 3;   // 8 GB por arquivo de mídia
 
@@ -148,16 +150,42 @@ function register(app, { root } = {}) {
   });
 
   // ── Importar um arquivo .ms (mídias embutidas em base64 viram arquivos) ──
+  // O corpo é o próprio arquivo .ms (o cliente envia sem reprocessar).
+  // ?name= nome do arquivo (usado se o projeto não tiver nome).
+  // Accept: application/x-ndjson → progresso por linha:
+  //   { type:'progress', done, total } … { type:'done', meta } | { type:'error', error }
   app.post('/api/projects/import', async (req, res) => {
     const payload = req.body;
-    if (!payload || !payload.project || !Array.isArray(payload.templates) || !Array.isArray(payload.clips)) {
+    if (!payload || typeof payload !== 'object') {
       return res.status(400).json({ error: 'Arquivo de projeto inválido.' });
     }
+    if (payload.signature !== 'MOTION_STUDIO_PROJECT' && payload.format !== 'motion-studio-project') {
+      return res.status(400).json({ error: 'Este arquivo não é um projeto do Motion Studio.' });
+    }
+    if (Number(payload.version) !== 1) {
+      return res.status(400).json({ error: `Versão de projeto não suportada: ${payload.version}.` });
+    }
+    if (!payload.project || !Array.isArray(payload.templates) || !Array.isArray(payload.clips)) {
+      return res.status(400).json({ error: 'O projeto está incompleto ou corrompido.' });
+    }
+    const fallbackName = String(req.query.name || '').trim().slice(0, 120);
+    payload.project = { ...payload.project, name: payload.project.name || fallbackName || 'Projeto importado' };
+
+    const stream = /application\/x-ndjson/.test(req.get('accept') || '');
+    const send = obj => res.write(`${JSON.stringify(obj)}\n`);
+    if (stream) {
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.flushHeaders();
+    }
+
     try {
       const meta = await createProject({ ...payload, templates: [] });
       const dir = dirOf(meta.id);
       const templates = [];
-      for (const tmpl of payload.templates) {
+      const total = payload.templates.length;
+      if (stream) send({ type: 'progress', done: 0, total });
+      for (const [index, tmpl] of payload.templates.entries()) {
         const m = /^data:([\w/+.-]+)?(;base64)?,(.*)$/s.exec(String(tmpl?.dataUrl || ''));
         if (tmpl?.type !== 'html' && tmpl?.type !== 'text' && m) {
           const ext = (String(m[1] || '').split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 5);
@@ -168,13 +196,15 @@ function register(app, { root } = {}) {
         } else {
           templates.push(tmpl);
         }
+        if (stream) send({ type: 'progress', done: index + 1, total, name: String(tmpl?.name || '').slice(0, 80) });
       }
       const full = await readJson(path.join(dir, 'project.json'));
       full.templates = templates;
       await writeJsonAtomic(path.join(dir, 'project.json'), full);
-      res.json(meta);
+      if (stream) { send({ type: 'done', meta }); res.end(); } else res.json(meta);
     } catch (err) {
-      res.status(500).json({ error: `Falha ao importar: ${err.message}` });
+      const error = `Falha ao importar: ${err.message}`;
+      if (stream) { send({ type: 'error', error }); res.end(); } else res.status(500).json({ error });
     }
   });
 
@@ -300,7 +330,14 @@ function register(app, { root } = {}) {
     let written = 0;
     req.on('data', chunk => { written += chunk.length; });
     req.pipe(out);
-    out.on('finish', () => res.json({ url: mediaUrl(req.params.id, file), file, size: written }));
+    out.on('finish', async () => {
+      const payload = { url: mediaUrl(req.params.id, file), file, size: written };
+      // Vídeo que o navegador não toca: começa o proxy H.264 em segundo plano
+      if (/^video\//i.test(req.headers['content-type'] || '') || VIDEO_EXT_RE.test(file)) {
+        try { payload.proxy = await ensureProxy(req.params.id, dir, file); } catch (_) { /* sem ffprobe: segue sem proxy */ }
+      }
+      res.json(payload);
+    });
     const fail = err => {
       out.destroy();
       fs.promises.unlink(target).catch(() => {});
@@ -309,6 +346,38 @@ function register(app, { root } = {}) {
     out.on('error', fail);
     req.on('aborted', () => fail(new Error('envio interrompido')));
   });
+
+  /**
+   * Proxy de vídeo (libs/media-proxy.js). Também atende mídia antiga: se o
+   * proxy não existe e o vídeo precisa, começa agora.
+   * → { needed, status: 'running'|'done'|'error', progress, url, reasons, error }
+   */
+  app.get('/api/projects/:id/media/:file/proxy', async (req, res) => {
+    const dir = projectDir(req, res);
+    if (!dir) return;
+    const file = String(req.params.file || '');
+    if (!MEDIA_RE.test(file) || !fs.existsSync(path.join(dir, 'media', file))) return res.status(404).json({ error: 'Mídia não encontrada.' });
+    try {
+      res.json(await ensureProxy(req.params.id, dir, file));
+    } catch (err) {
+      res.status(500).json({ error: `Não foi possível analisar o vídeo: ${err.message}` });
+    }
+  });
+
+  async function ensureProxy(projectId, dir, file) {
+    const key = `${projectId}/${file}`;
+    const proxyFile = MediaProxy.proxyName(file);
+    const src = path.join(dir, 'media', file);
+    const dst = path.join(dir, 'media', proxyFile);
+    const url = mediaUrl(projectId, proxyFile);
+    const known = MediaProxy.proxyStatus(key);
+    if (known) return { needed: true, url, ...known };
+    if (fs.existsSync(dst)) return { needed: true, status: 'done', progress: 1, url };
+    const { needsProxy, reasons, info } = await MediaProxy.probe(src);
+    if (!needsProxy) return { needed: false };
+    const job = MediaProxy.startProxy(key, src, dst, info);
+    return { needed: true, status: job.status, progress: job.progress, url, reasons };
+  }
 
   app.get('/api/projects/:id/media/:file', (req, res) => {
     const dir = projectDir(req, res);
@@ -327,7 +396,8 @@ function register(app, { root } = {}) {
     if (!dir) return;
     try {
       const full = await readJson(path.join(dir, 'project.json'));
-      const used = new Set((full.templates || []).map(t => t?.mediaFile).filter(Boolean));
+      // Cópias derivadas também contam: proxy H.264 e vídeo sem fundo
+      const used = new Set((full.templates || []).flatMap(t => [t?.mediaFile, t?.proxyFile, t?.sourceFile]).filter(Boolean));
       const files = await fs.promises.readdir(path.join(dir, 'media')).catch(() => []);
       let freed = 0, removed = 0;
       for (const file of files) {
@@ -417,7 +487,20 @@ function register(app, { root } = {}) {
     res.json({ ok: true, dir });
   });
 
-  return { baseDir };
+  /** Caminho de uma mídia do projeto (null se id/arquivo inválido ou ausente) */
+  function mediaPath(id, file) {
+    if (!ID_RE.test(String(id)) || !MEDIA_RE.test(String(file))) return null;
+    const p = path.join(dirOf(id), 'media', file);
+    return fs.existsSync(p) ? p : null;
+  }
+
+  return {
+    baseDir,
+    mediaPath,
+    mediaUrl,
+    /** Nome livre na pasta de mídia do projeto (derivados: proxy, sem fundo…) */
+    freeMediaName: (id, name) => uniqueMediaName(path.join(dirOf(id), 'media'), name),
+  };
 }
 
 module.exports = { register };

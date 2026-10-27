@@ -8,6 +8,11 @@ const os   = require('os');
 const http = require('http');
 const { execFile } = require('child_process');
 const crypto = require('crypto');
+const { pipeline: streamPipeline } = require('stream/promises');
+const { ffmpegPath, ffprobePath, ffmpegMajor } = require('./libs/ffmpeg-bin');
+const ClipHost = require('./libs/clip-host');
+const { analyzeProjectAudio } = require('./libs/audio-analysis');
+const HyperframesCatalog = require('./libs/hyperframes-catalog');
 const exportMediaUploads =
   new Map();
 
@@ -370,6 +375,20 @@ async function getWVC() {
       } catch (_) {}
     }
 
+    // FFmpeg 7.1+ não converte mais o JPEG capturado (faixa completa) para a
+    // faixa limitada só por "-pix_fmt yuv420p": o libx264 aceita as duas e o
+    // vídeo sairia marcado como full range (cores lavadas/estouradas em redes
+    // sociais e players). Fixar a saída em "tv" faz o ffmpeg converter.
+    try {
+      const Synthesizer = (await import('web-video-creator/core/Synthesizer.js')).default;
+      const createVideoEncoder = Synthesizer.prototype._createVideoEncoder;
+      Synthesizer.prototype._createVideoEncoder = function () {
+        return createVideoEncoder.call(this).outputOption('-color_range', 'tv');
+      };
+    } catch (err) {
+      console.warn(`[WVC] Não foi possível fixar a faixa de cor da saída: ${err.message}`);
+    }
+
     let mod;
     try {
       mod = await import('web-video-creator');
@@ -377,8 +396,7 @@ async function getWVC() {
       throw new Error(
         `[WVC] Falha ao importar 'web-video-creator': ${err.message}\n` +
         `Solução: rode "npm install web-video-creator" e verifique se o pacote ` +
-        `está no package.json. Se ffmpeg-static falhou, defina ` +
-        `FFMPEG_BINARIES_URL=https://cdn.npmmirror.com/binaries/ffmpeg-static`
+        `está no package.json. Para (re)baixar o FFmpeg, rode "npm run ffmpeg:update".`
       );
     }
  
@@ -410,7 +428,7 @@ async function getWVC() {
         NVIDIA_H265: ['NVIDIA', 'H265'],
         INTEL_H264:  ['INTEL',  'H264'],
         AMD_H264:    ['AMD',    'H264'],
-        MAC_H264:    ['OMX',    'H264'],
+        MAC_H264:    ['VIDEOTOOLBOX', 'H264'],
       }[key];
       if (!path) return null;
       const [vendor, codec] = path;
@@ -430,6 +448,7 @@ async function getWVC() {
     const frameFormat = process.env.WVC_FRAME_FORMAT === 'png' ? 'png' : 'jpeg';
     const frameQuality = fastMode ? 90 : 100;
 
+    console.log(`[WVC] FFmpeg ${ffmpegMajor() || '?'}.x: ${ffmpegPath()}`);
     console.log(`[WVC] Encoder selecionado: ${encoder}`);
     console.log(`[WVC] Plataforma: ${os.platform()}, CPUs: ${CPUS}, trechos em paralelo: até ${RENDER_WORKERS_MAX}`);
     console.log(`[WVC] Captura de frames: ${frameFormat === 'png' ? 'PNG lossless' : `JPEG ${frameQuality}`}`);
@@ -460,6 +479,9 @@ async function getWVC() {
       ...(process.env.MS_CHROME_PATH ? { browserExecutablePath: process.env.MS_CHROME_PATH } : {}),
       debug:       process.env.WVC_DEBUG === '1',
       ffmpegDebug: process.env.WVC_DEBUG === '1',
+      // Sem isto o WVC usa os próprios ffmpeg-static (6.1) e ffprobe-static (4.0)
+      ffmpegExecutablePath:  ffmpegPath(),
+      ffprobeExecutablePath: ffprobePath(),
     });
 
     // Flags extras do Chromium. O WVC não tem chave de config para isso (a
@@ -737,6 +759,10 @@ if (logMatch) {
         );   // serveFile já faz stat + stream + mime
       }
     
+      // Assets dos blocos do HyperFrames (mesmo proxy do app: libs/hyperframes-catalog.js)
+      const hfAsset = /^\/api\/hyperframes\/asset\/([^/]+)\/(.+)$/.exec(url.split('?')[0]);
+      if (hfAsset) return HyperframesCatalog.serveAsset(hfAsset[1], decodeURIComponent(hfAsset[2]), res);
+
       // 1) HTML da cena
       const sceneMatch = /^\/job\/([^/]+)\/scene-(\d+)\.html$/.exec(url);
       if (sceneMatch) {
@@ -1149,18 +1175,6 @@ function buildHtmlLayerHtmlGlobal(
     projectRes
   );
 
-  const html =
-    inlineLocalAssets(
-      String(clip.html || ''),
-      projectRoot
-    );
-
-  const payload =
-    Buffer.from(
-      html,
-      'utf8'
-    ).toString('base64');
-
   /*
    * Texto: o template é reconstruído com duration = clip.duration, então o
    * tempo é 1:1 com a timeline e sem trim/stretch — igual ao preview
@@ -1190,6 +1204,34 @@ function buildHtmlLayerHtmlGlobal(
         )
       )
     );
+
+  // Kit (window.MS + adaptadores) e, se o clipe usa MS.audio, o áudio do
+  // projeto com o mapa tempo-do-clipe → tempo-da-timeline
+  const fit = Boolean(clip.fitAnimationToClip && !isText);
+  const duration = Math.max(0.001, finiteNumber(clip.duration, 1));
+  const source = String(clip.html || '');
+  const audio = clip._projectAudio && ClipHost.usesAudio(source)
+    ? {
+        ...clip._projectAudio,
+        map: {
+          offset: Math.max(0, finiteNumber(clip.start)),
+          sourceIn,
+          scale: fit && sourceOut > sourceIn ? duration / (sourceOut - sourceIn) : 1,
+        },
+      }
+    : null;
+
+  const html =
+    inlineLocalAssets(
+      ClipHost.injectRuntime(source, { audio }),
+      projectRoot
+    );
+
+  const payload =
+    Buffer.from(
+      html,
+      'utf8'
+    ).toString('base64');
 
   return `
 <div
@@ -1231,6 +1273,65 @@ function buildHtmlLayerHtmlGlobal(
 // #endregion
 
 // #region renderJob — orquestração via WVC (composição por tracks)
+/**
+ * Motion blur do export: cada quadro final é a média de `samples` subquadros
+ * renderizados (tmix do ffmpeg, pesos do mais antigo ao mais novo). Sutil:
+ * rastro que some atrás do movimento; forte: obturador aberto o quadro todo.
+ */
+const MOTION_BLUR = {
+  subtle: { samples: 4, weights: '1 2 3 4' },
+  strong: { samples: 6, weights: '1 1 1 1 1 1' },
+};
+
+/** Render em fps × N → vídeo em fps com os subquadros misturados (mesmo encoder) */
+async function applyMotionBlur(file, { fps, blur, format, encoderName, bitrateKbps }) {
+  const tmp = file.replace(/(\.\w+)$/, '.blur$1');
+  const codec = format === 'webm'
+    ? ['-c:v', 'libvpx-vp9', '-b:v', `${bitrateKbps}k`, '-row-mt', '1', '-deadline', 'good', '-cpu-used', '4']
+    : ['-c:v', encoderName, '-b:v', `${bitrateKbps}k`, ...(encoderName === 'libx264' ? ['-preset', 'medium'] : []),
+       '-pix_fmt', 'yuv420p', '-color_range', 'tv', '-movflags', '+faststart'];
+  try {
+    await execFileAsync(ffmpegPath(), [
+      '-hide_banner', '-loglevel', 'error', '-y', '-i', file,
+      '-vf', `tmix=frames=${blur.samples}:weights='${blur.weights}',fps=${fps}`,
+      '-an', ...codec, tmp,
+    ]);
+    await fs.promises.rename(tmp, file);
+  } finally {
+    fs.promises.unlink(tmp).catch(() => {});
+  }
+}
+
+/** Clipes que usam MS.audio recebem o áudio do projeto analisado por quadro */
+async function attachProjectAudio(clips, fps, totalDuration, onStart = () => {}) {
+  const reactive = clips.filter(c => c.type === 'html' && ClipHost.usesAudio(String(c.html || '')));
+  if (!reactive.length) return;
+  onStart();
+  try {
+    const projectAudio = await analyzeProjectAudio(soundClipsOf(clips).map(c => ({
+      src: c._audioPath || c.dataUrl,
+      start: c.start,
+      trimStart: c.trimStart,
+      duration: c.duration,
+      volume: c.volume,
+    })), { fps, duration: totalDuration });
+    reactive.forEach(c => { c._projectAudio = projectAudio; });
+  } catch (err) {
+    console.warn('[Export] Análise de áudio falhou (clipes ficam sem reação ao som):', err.message);
+  }
+}
+
+/**
+ * Clipes com som: vídeo e áudio com volume. Volume 0 = mudo (clip, track
+ * mutada ou fora do solo) e curva de keyframes toda em zero ficam de fora.
+ */
+function soundClipsOf(clips) {
+  return clips.filter(c =>
+    (c.type === 'video' || c.type === 'audio') && finiteNumber(c.volume, 1) > 0 &&
+    (!Array.isArray(c.volumeKeys) || c.volumeKeys.some(k => finiteNumber(k.v, 0) > 0))
+  );
+}
+
 async function renderJob(jobId, clips, opts) {
   const { fps, format, width, height, projectRes } = opts;
  
@@ -1272,12 +1373,18 @@ async function renderJob(jobId, clips, opts) {
       0
     );
     if (!(totalDuration > 0)) throw new Error('Duração total inválida.');
- 
+
+    // 1b. Clipes que reagem ao som (MS.audio): áudio do projeto por quadro
+    await attachProjectAudio(clips, fps, totalDuration, () => updateJob(jobId, { message: 'Analisando o áudio do projeto…' }));
+
     // 2. Trechos renderizados em paralelo. Cada um é a mesma cena composta,
     //    com o relógio deslocado para o início do trecho e só as camadas que
-    //    aparecem nele (a página não carrega o que não usa).
-    const totalFrames = Math.max(1, Math.floor(Math.round(totalDuration * 1000) / 1000 * fps + 1e-6));
-    const workers     = planRenderWorkers(totalFrames, fps, Number(opts.workersPerScene) || 0, encoderName);
+    //    aparecem nele (a página não carrega o que não usa). Motion blur:
+    //    N subquadros por quadro (renderFps), misturados no fim com tmix.
+    const blur        = MOTION_BLUR[opts.motionBlur] || null;
+    const renderFps   = blur ? fps * blur.samples : fps;
+    const totalFrames = Math.max(1, Math.floor(Math.round(totalDuration * 1000) / 1000 * renderFps + 1e-6));
+    const workers     = planRenderWorkers(totalFrames, renderFps, Number(opts.workersPerScene) || 0, encoderName);
     const chunks = Array.from({ length: workers }, (_, k) => {
       const firstFrame = Math.round(k * totalFrames / workers);
       const endFrame   = Math.round((k + 1) * totalFrames / workers);
@@ -1286,10 +1393,14 @@ async function renderJob(jobId, clips, opts) {
 
     // 3. Bitrate calibrado pela resolução/fps/encoder deste export.
     const bitrateKbps = computeVideoBitrateKbps(width, height, fps, encoderName, opts.quality);
+    // Com motion blur o render é um intermediário em fps × N: qualidade máxima,
+    // porque ele ainda passa por mais uma codificação
+    const renderBitrateKbps = blur ? computeVideoBitrateKbps(width, height, renderFps, encoderName, 'max') : bitrateKbps;
     const outputPath  = path.join(tmpDir, `output.${format}`);
     console.log(
       `[Job ${jobId}] ${width}x${height}@${fps} · ${totalDuration.toFixed(2)}s · ` +
-      `encoder=${encoderName} · bitrate=${bitrateKbps}k · ${workers} trecho(s) em paralelo`
+      `encoder=${encoderName} · bitrate=${bitrateKbps}k · ${workers} trecho(s) em paralelo` +
+      (blur ? ` · motion blur ${opts.motionBlur} (${blur.samples}× = ${renderFps} fps)` : '')
     );
 
     const reportProgress = () => {
@@ -1303,11 +1414,11 @@ async function renderJob(jobId, clips, opts) {
     };
 
     const videos = chunks.map(chunk => {
-      const from = chunk.firstFrame / fps;
-      const to   = (chunk.firstFrame + chunk.frames) / fps;
+      const from = chunk.firstFrame / renderFps;
+      const to   = (chunk.firstFrame + chunk.frames) / renderFps;
       // 4. Publica a cena no servidor interno. Sem isto o Chromium recebe 404
       //    e o vídeo sai preto.
-      sceneStore.set(`${jobId}_${chunk.index}`, buildFullScene(clips, width, height, root, projectRes, fps, {
+      sceneStore.set(`${jobId}_${chunk.index}`, buildFullScene(clips, width, height, root, projectRes, renderFps, {
         totalDuration, from, to, background: opts.background,
       }));
       // Um trecho só: direto no arquivo final. Vários: MP4 em MPEG-TS (emenda
@@ -1318,9 +1429,9 @@ async function renderJob(jobId, clips, opts) {
 
       const options = {
         url: `http://127.0.0.1:${port}/job/${jobId}/scene-${chunk.index}.html`,
-        width, height, fps,
+        width, height, fps: renderFps,
         // +½ quadro: o WVC arredonda para baixo (floor(duração × fps))
-        duration:     (chunk.frames + 0.5) * 1000 / fps,
+        duration:     (chunk.frames + 0.5) * 1000 / renderFps,
         outputPath:   chunk.outputPath,
         showProgress: workers === 1,
         // O padrão do WVC é 'prefer-hardware': sem decodificador de vídeo por
@@ -1335,7 +1446,7 @@ async function renderJob(jobId, clips, opts) {
         startTime:    0,
         timeout:      30 * 60 * 1000,
 
-        videoBitrate: `${bitrateKbps}k`,
+        videoBitrate: `${renderBitrateKbps}k`,
         audioBitrate: '320k',
         // yuv420p roda em qualquer player/telão. yuv444p preserva mais cor,
         // mas muitos players de mídia não reproduzem.
@@ -1397,13 +1508,13 @@ async function renderJob(jobId, clips, opts) {
       chunks.forEach(c => fs.promises.unlink(c.outputPath).catch(() => {}));
     }
 
+    if (blur) {
+      updateJob(jobId, { progress: 99, message: 'Aplicando motion blur…' });
+      await applyMotionBlur(outputPath, { fps, blur, format, encoderName, bitrateKbps });
+    }
+
     // 6. Áudio dos clipes de vídeo e de áudio (o WVC captura só imagem).
-    //    Volume 0 = mudo (clip, track mutada ou fora do solo): fica fora da mixagem.
-    const soundClips = clips.filter(c =>
-      (c.type === 'video' || c.type === 'audio') && finiteNumber(c.volume, 1) > 0 &&
-      // curva de keyframes toda em zero = mudo
-      (!Array.isArray(c.volumeKeys) || c.volumeKeys.some(k => finiteNumber(k.v, 0) > 0))
-    );
+    const soundClips = soundClipsOf(clips);
     if (soundClips.length > 0) {
       updateJob(jobId, { progress: 99, message: 'Mixando áudio…' });
       await mixAudioTracks(soundClips, outputPath, format);
@@ -1415,6 +1526,78 @@ async function renderJob(jobId, clips, opts) {
     console.error(`[Job ${jobId}] ERRO:`, msg);
     if (err?.stack) console.error(err.stack);
     failJob(jobId, msg);
+  }
+}
+
+/**
+ * Quadro único em PNG: a mesma cena do export num trecho de um quadro, com a
+ * página do WVC capturando em PNG (o quadro sai do Chromium sem passar pelo
+ * encoder de vídeo — sem perda e sem subamostragem de cor).
+ */
+async function renderStill(clips, { time = 0, fps = 30, width, height, projectRes, background }) {
+  const jobId = `still-${crypto.randomBytes(5).toString('hex')}`;
+  const tmpDir = path.join(os.tmpdir(), `mstudio-${jobId}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+  jobMediaDirs.set(jobId, tmpDir);
+  try {
+    const { wvc } = await getWVC();
+    const port = await ensureInternalServer();
+    await materializeMediaForJob(jobId, clips, tmpDir, port);
+    const totalDuration = clips.reduce((mx, c) => Math.max(mx, (c.start || 0) + (c.duration || 0)), 0);
+    if (!(totalDuration > 0)) throw new Error('Projeto sem duração.');
+    await attachProjectAudio(clips, fps, totalDuration);
+
+    // Quadro exato do playhead (o mesmo que o export mostraria nesse tempo)
+    const frame = Math.min(Math.max(0, Math.round(finiteNumber(time) * fps)), Math.max(0, Math.ceil(totalDuration * fps) - 1));
+    const from = frame / fps;
+    sceneStore.set(`${jobId}_0`, buildFullScene(clips, width, height, getProjectRoot(), projectRes, fps, {
+      totalDuration, from, to: from + 2 / fps, background,
+    }));
+
+    const video = wvc.createSingleVideo({
+      url: `http://127.0.0.1:${port}/job/${jobId}/scene-0.html`,
+      width, height, fps,
+      duration: 1.5 * 1000 / fps,
+      outputPath: path.join(tmpDir, 'still.mp4'),
+      showProgress: false,
+      videoDecoderHardwareAcceleration: process.env.WVC_VIDEO_DECODER || 'no-preference',
+      startTime: 0,
+      timeout: 5 * 60 * 1000,
+      videoBitrate: '8000k',
+      pixelFormat: 'yuv420p',
+    });
+
+    // A página do pool volta ao formato dela ao ser liberada
+    video.onPageAcquire(async () => {
+      const page = await wvc.pool.acquirePage();
+      const previous = page.frameFormat;
+      const release = page.release.bind(page);
+      page.frameFormat = 'png';
+      page.release = function () {
+        page.frameFormat = previous;
+        page.release = release;
+        return release();
+      };
+      return page;
+    });
+    let png = null;
+    const input = video.input.bind(video);
+    video.input = buffer => {
+      if (!png) png = Buffer.from(buffer);
+      return input(buffer);
+    };
+
+    await new Promise((resolve, reject) => {
+      video.once('completed', resolve);
+      video.once('error', reject);
+      Promise.resolve(video.start()).catch(reject);
+    });
+    if (!png) throw new Error('nenhum quadro foi capturado.');
+    return { png, time: from };
+  } finally {
+    sceneStore.delete(`${jobId}_0`);
+    jobMediaDirs.delete(jobId);
+    fs.rm(tmpDir, { recursive: true, force: true }, () => {});
   }
 }
 
@@ -1469,7 +1652,8 @@ function buildMediaLayerHtmlGlobal(
     )}" ` +
     `data-start="${start}" ` +
     `data-dur="${duration}" ` +
-    `data-trim="${trimStart}"`;
+    `data-trim="${trimStart}"` +
+    (clip.alphaPacked === 'sbs' ? ' data-alpha="sbs"' : '');
 
   if (clip.type === 'image') {
     return `
@@ -1525,6 +1709,20 @@ function buildMediaLayerHtmlGlobal(
 }
 
 let _clipFxSource = null;
+let _mediaFxSource = null;
+
+/** Interface/media-fx.js: efeitos de pixel e vídeo sem fundo iguais ao preview */
+function mediaFxSource() {
+  if (_mediaFxSource == null) {
+    try {
+      _mediaFxSource = fs.readFileSync(path.join(getProjectRoot(), 'Interface', 'media-fx.js'), 'utf8');
+    } catch (err) {
+      console.warn('[WVC] media-fx.js indisponível — export sem efeitos de pixel:', err.message);
+      _mediaFxSource = '';
+    }
+  }
+  return _mediaFxSource;
+}
 
 /** O mesmo Interface/clip-fx.js do editor: efeitos iguais no preview e no export */
 function clipFxSource() {
@@ -1542,6 +1740,7 @@ function clipFxSource() {
 function buildSceneRuntimeScript(totalDuration, fps, timeOffset = 0, fxScale = 1) {
   return `
 <script>${clipFxSource()}</script>
+<script>${mediaFxSource()}</script>
 <script>
 (function () {
   'use strict';
@@ -1859,7 +2058,30 @@ function buildSceneRuntimeScript(totalDuration, fps, timeOffset = 0, fxScale = 1
       layer.style.display = active ? '' : 'none';
       if (type === 'text' && active) renderText(layer, time - layer.__start);
       if (active) applyFx(layer, time);
+      if (active && (type === 'video' || type === 'image')) renderMediaFx(layer, time);
     }
+  }
+
+  // Efeitos de pixel e vídeo sem fundo (media-fx.js) sobre o canvas do WVC
+  // (que substitui o <video>) ou a <img>; a mídia original fica invisível
+  function renderMediaFx(layer, time) {
+    if (!window.MediaFX) return;
+    if (layer.__mfxParams === undefined) {
+      var fx = layer.__fx && layer.__fx.fx;
+      layer.__mfxParams = window.MediaFX.paramsFor(fx, { alphaPacked: layer.dataset.alpha || null });
+    }
+    var params = layer.__mfxParams;
+    if (!params) return;
+    if (!layer.__mfx) {
+      var source = layer.querySelector('canvas:not(.ms-mediafx), img, video');
+      if (!source) return;
+      layer.__mfx = window.MediaFX.attach(source, layer);
+      if (!layer.__mfx) { layer.__mfxParams = null; return; }
+      layer.__mfxSource = source;
+    }
+    layer.__mfxSource.style.opacity = '0';
+    layer.__mfx.set(params);
+    layer.__mfx.render(Math.max(0, time - layer.__start));
   }
 
   // ── Prontidão inicial: vídeos, fontes do pai e iframes do início ──
@@ -2264,12 +2486,23 @@ async function materializeMediaForJob(
         clip.dataUrl
       )
     ) {
-      if (clip.type !== 'image') {
-        clip._audioPath =
-          clip.dataUrl;
+      if (clip.type === 'image') {
+        continue;
       }
 
-      continue;
+      // FFmpeg 9 verifica o certificado TLS por padrão e o build estático nem
+      // sempre acha as CAs do sistema: o Node baixa a mídia antes da mixagem
+      try {
+        const response = await fetch(clip.dataUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        await streamPipeline(response.body, fs.createWriteStream(destination));
+      } catch (err) {
+        console.warn(`[Export] Download de "${clip.label}" falhou (${err.message}); o ffmpeg tenta a URL direto.`);
+        fs.rmSync(destination, { force: true });
+        clip._audioPath =
+          clip.dataUrl;
+        continue;
+      }
     } else {
       throw new Error(
         `Mídia ausente para "${clip.label}".`
@@ -2345,20 +2578,6 @@ function safeCssValue(
   return text || fallback;
 }
 
-function getFfmpegBinary() {
-  try {
-    return (
-      process.env.FFMPEG_PATH ||
-      require('ffmpeg-static') ||
-      'ffmpeg'
-    );
-  } catch (_) {
-    return (
-      process.env.FFMPEG_PATH ||
-      'ffmpeg'
-    );
-  }
-}
 // Shutdown gracioso
 async function shutdown() {
   if (_internalServer) {
@@ -2374,15 +2593,6 @@ process.on('SIGINT',  () => shutdown().then(() => process.exit(0)));
 
 // #region Audio Mixing
 
-/** Localiza o binário ffmpeg — primeiro tenta o bundled do WVC, depois o do sistema */
-async function getFfmpegBin() {
-  try {
-    const p = require('ffmpeg-static');
-    if (p && fs.existsSync(p)) return p;
-  } catch {}
-  return process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-}
-
 /**
  * Detecta o melhor encoder H.264 REALMENTE funcional na máquina,
  * fazendo um encode-teste de 0.2s. Listar com `-encoders` não basta:
@@ -2393,7 +2603,7 @@ let _encoderProbe = null;
 async function detectBestEncoder() {
   if (_encoderProbe) return _encoderProbe;
   _encoderProbe = (async () => {
-    const ffmpeg = await getFfmpegBin();
+    const ffmpeg = ffmpegPath();
     const candidates = [
       'h264_nvenc',         // NVIDIA
       'h264_qsv',           // Intel QuickSync
@@ -2424,7 +2634,7 @@ async function detectBestEncoder() {
  * -c copy): todos saíram do mesmo encoder com os mesmos parâmetros.
  */
 async function concatChunks(chunkPaths, outputPath, format) {
-  const ffmpeg   = await getFfmpegBin();
+  const ffmpeg   = ffmpegPath();
   const listPath = path.join(path.dirname(outputPath), 'chunks.txt');
   // Entre aspas simples o caminho é literal; ' vira '\''
   const quote = p => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`;
@@ -2442,12 +2652,14 @@ async function concatChunks(chunkPaths, outputPath, format) {
   }
 }
 
-function probeAudio(ffmpegBin, filePath) {
+/** true se o arquivo tem ao menos uma faixa de áudio */
+function probeAudio(filePath) {
   return new Promise(resolve => {
-    execFile(ffmpegBin, ['-hide_banner', '-i', filePath],
-      { timeout: 8000 },
-      // ffmpeg -i sem output sai com erro, mas o stderr lista os streams
-      (_err, _stdout, stderr) => resolve(/Stream #\d+:\d+.*Audio:/.test(stderr || ''))
+    execFile(ffprobePath(), [
+      '-v', 'error', '-select_streams', 'a',
+      '-show_entries', 'stream=index', '-of', 'csv=p=0', filePath,
+    ], { timeout: 8000, windowsHide: true },
+      (err, stdout) => resolve(!err && String(stdout).trim().length > 0)
     );
   });
 }
@@ -2490,7 +2702,7 @@ async function mixAudioTracks(
 
   // Vídeo sem faixa de áudio derrubaria o filtro [n:a:0] e a mixagem inteira
   const hasAudio = await Promise.all(
-    inputs.map(item => probeAudio(getFfmpegBinary(), item.source))
+    inputs.map(item => probeAudio(item.source))
   );
   inputs = inputs.filter((_, index) => hasAudio[index]);
 
@@ -2622,9 +2834,16 @@ async function mixAudioTracks(
     `[mixedAudio]`
   );
 
+  // Muitos clips com keyframes de volume passam do limite de linha de comando
+  // do Windows (32k): no FFmpeg 7+ o filtro vai num arquivo (-/filter_complex)
+  const filterGraph = filters.join(';');
+  const filterPath = filterGraph.length > 4000 && ffmpegMajor() >= 7
+    ? path.join(path.dirname(outputPath), `audio-filter-${Date.now()}.txt`)
+    : null;
+  if (filterPath) await fs.promises.writeFile(filterPath, filterGraph);
+
   args.push(
-    '-filter_complex',
-    filters.join(';'),
+    ...(filterPath ? ['-/filter_complex', filterPath] : ['-filter_complex', filterGraph]),
 
     '-map',
     '0:v:0',
@@ -2662,10 +2881,14 @@ async function mixAudioTracks(
     temporaryPath
   );
 
-  await execFileAsync(
-    getFfmpegBinary(),
-    args
-  );
+  try {
+    await execFileAsync(
+      ffmpegPath(),
+      args
+    );
+  } finally {
+    if (filterPath) fs.promises.unlink(filterPath).catch(() => {});
+  }
 
   fs.rmSync(
     outputPath,
@@ -2904,7 +3127,7 @@ function execFileAsync(
 
 module.exports = {
   createJob, getJob, updateJob, finalizeJob, failJob,
-  downloadJob, renderJob,
+  downloadJob, renderJob, renderStill,
   setProjectRoot,
   encodeSceneFrames:  () => { throw new Error('Pipeline migrado para WVC — encodeSceneFrames removido'); },
   concatenateVideos:  () => { throw new Error('Pipeline migrado para WVC — concat é interno ao WVC'); },

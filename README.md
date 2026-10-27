@@ -6,7 +6,7 @@ Editor de vídeo com templates HTML animados, legendas automáticas (Whisper), b
 
 - Node.js 20+
 - Python 3.9+ (para a transcrição com Whisper)
-- FFmpeg (já incluído via `ffmpeg-static`)
+- FFmpeg 9.0.2 (baixado para `.bin/ffmpeg` no `npm install`; `npm run ffmpeg:update` baixa de novo, `FFMPEG_PATH`/`FFPROBE_PATH` sobrescrevem)
 
 ## Instalação
 
@@ -23,6 +23,18 @@ pip install -r libs/requirements-whisper.txt
 
 O modelo **não** está no repositório (é grande). Ele é o `faster-whisper large-v3-turbo`
 e deve ficar em `models/whisper/large-v3-turbo/` (ou ser baixado pelo Hugging Face na primeira execução).
+
+### Remoção de fundo
+
+"Remover fundo" (propriedades de um clip de vídeo ou imagem) usa o mesmo ambiente Python
+da transcrição (`onnxruntime` + `numpy`) e baixa no primeiro uso o modelo
+[Robust Video Matting](https://github.com/PeterL1n/RobustVideoMatting) (~15 MB, GPL-3.0)
+para `models/rvm/`.
+
+### Código e conteúdo de terceiros
+
+- `libs/vendor/onetake/` — biblioteca de movimentos do [OneTake](https://github.com/feitangyuan/onetake), PolyForm Noncommercial (uso não comercial; ver `libs/vendor/README.md`).
+- Blocos importados da aba **Blocos → Catálogo HyperFrames** vêm do [HyperFrames](https://github.com/heygen-com/hyperframes) (Apache-2.0) e levam a atribuição no próprio HTML.
 
 ### Configuração de IA (opcional)
 

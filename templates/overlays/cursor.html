@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Cursor do macOS</title>
+<!-- Overlay do Motion Studio: cursor entra, clica no centro da caixa do clipe e fica. Posicione o centro do clipe sobre o alvo. -->
+<style>
+  html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: transparent; }
+  #cursor { position: absolute; left: 0; top: 0; transform-origin: 0 0; filter: drop-shadow(0 3px 6px rgba(0,0,0,.35)); will-change: transform; }
+  #ring { position: absolute; left: 0; top: 0; border-radius: 50%; border: 3px solid rgba(255,255,255,.95); box-shadow: 0 0 0 2px rgba(0,0,0,.25); will-change: transform, opacity; }
+</style>
+</head>
+<body>
+<div id="ring"></div>
+<svg id="cursor" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+  const KIND = /*ms:kind*/'arrow';
+  const DUR = 2.4;
+  const ARRIVE = 0.9, CLICK = 1.05;
+  const SHAPES = {
+    // Seta do macOS: preta com contorno branco; a ponta é o "hotspot"
+    arrow: { d: 'M6 3 L6 26 L11.6 20.7 L15.1 28.8 L18.7 27.2 L15.2 19.3 L22.8 19.3 Z', fill: '#111', stroke: '#fff', hot: [6, 3] },
+    // Mão apontando: branca com contorno preto; o hotspot é a ponta do indicador
+    hand: { d: 'M11 3c1.1 0 2 .9 2 2v9l1-.2V9.5c0-1 .8-1.8 1.8-1.8s1.8.8 1.8 1.8V14l.8-.1v-3c0-1 .8-1.8 1.8-1.8s1.8.8 1.8 1.8V15l.6-.1v-2c0-1 .8-1.7 1.7-1.7s1.7.8 1.7 1.7V20c0 4.5-3.2 8-7.8 8h-2.6c-2.4 0-4.4-1-5.8-2.9l-4.1-5.5c-.6-.9-.4-2.1.5-2.7.8-.6 2-.5 2.7.3L9 17.5V5c0-1.1.9-2 2-2z', fill: '#fff', stroke: '#111', hot: [11, 3] },
+  };
+  const shape = SHAPES[KIND] || SHAPES.arrow;
+  const cursor = document.getElementById('cursor');
+  const ring = document.getElementById('ring');
+  let W = 0, H = 0, size = 0, from = null;
+
+  function build() {
+    W = innerWidth; H = innerHeight;
+    size = Math.min(W, H) * 0.075;
+    cursor.innerHTML = `<path d="${shape.d}" fill="${shape.fill}" stroke="${shape.stroke}" stroke-width="1.6" stroke-linejoin="round"/>`;
+    cursor.style.width = cursor.style.height = size + 'px';
+    from = { x: W * 0.92, y: H * 1.05 };
+  }
+
+  MS.motion({
+    fps: 30,
+    durationInSeconds: DUR,
+    ready: build,
+    render(t) {
+      // Chega desacelerando por um arco suave e para; o clique é o único movimento depois
+      const k = MS.ease.outCubic(MS.seg(t, 0, ARRIVE));
+      const cx = W / 2, cy = H / 2;
+      const ctrl = { x: (from.x + cx) / 2 + W * 0.08, y: (from.y + cy) / 2 + H * 0.05 };
+      const x = (1 - k) * (1 - k) * from.x + 2 * (1 - k) * k * ctrl.x + k * k * cx;
+      const y = (1 - k) * (1 - k) * from.y + 2 * (1 - k) * k * ctrl.y + k * k * cy;
+      const press = MS.interpolate(t, [CLICK, CLICK + 0.08, CLICK + 0.22], [1, 0.84, 1], { easing: [MS.ease.outQuad, MS.ease.outQuad] });
+      const s = size / 32;
+      const [hx, hy] = shape.hot;
+      cursor.style.transform = `translate(${(x - hx * s * press).toFixed(1)}px, ${(y - hy * s * press).toFixed(1)}px) scale(${press.toFixed(4)})`;
+      const out = MS.interpolate(t, [DUR - 0.3, DUR], [1, 0]);
+      cursor.style.opacity = out.toFixed(3);
+      // Onda do clique saindo do ponto
+      const rp = MS.seg(t, CLICK, CLICK + 0.5);
+      const r = size * 0.9 * MS.ease.outQuart(rp);
+      ring.style.width = ring.style.height = (2 * r).toFixed(1) + 'px';
+      ring.style.transform = `translate(${(cx - r).toFixed(1)}px, ${(cy - r).toFixed(1)}px)`;
+      ring.style.opacity = (rp > 0 && rp < 1 ? (1 - rp) * 0.9 : 0).toFixed(3);
+    },
+  });
+</script>
+</body>
+</html>

@@ -694,7 +694,7 @@
       M.last = performance.now();
       loop();
     };
-    frame.srcdoc = doc;
+    frame.srcdoc = window.ClipHost ? window.ClipHost.injectRuntime(doc) : doc;
   }
 
   function seekPreview(t) {
