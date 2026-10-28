@@ -24,6 +24,6 @@ desktop/.cache/
 LauncherTemp/bin/
 LauncherTemp/obj/
 
-# Executável casca (npm run desktop:stub)
-Motion Studio.exe
+# Executável do macOS (npm run desktop:stub). O "Motion Studio.exe" de Windows
+# é o bootstrap (desktop/bootstrap) e vai no repositório.
 Motion Studio.app/

@@ -492,7 +492,7 @@ async function buildTarget(name) {
 
 let opts = { noPython: false, noZip: true, targets: [] };
 
-module.exports = { ROOT, CACHE, APP_NAME, NODE_VER, IS_MAC_HOST, log, run, rm, postject, brandWindowsExe, setWindowsGuiSubsystem, assertPeRelocations, macIcon, infoPlist };
+module.exports = { ROOT, CACHE, APP_NAME, NODE_VER, IS_MAC_HOST, log, run, rm, postject, brandWindowsExe, setWindowsGuiSubsystem, assertPeRelocations, macIcon, infoPlist, buildIco };
 
 // #region CLI
 if (require.main === module) {

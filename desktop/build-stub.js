@@ -60,6 +60,11 @@ function buildMac(main) {
 
 (async () => {
   if (!IS_WIN && process.platform !== 'darwin') throw new Error('só Windows e macOS');
+  // Windows: o .exe é o bootstrap (instala Node, pacotes e Python sozinho) — ver build-bootstrap.js
+  if (IS_WIN) {
+    require('./build-bootstrap').buildBootstrap();
+    return;
+  }
   const main = stubSource();
   const out = IS_WIN ? await buildWindows(main) : buildMac(main);
   B.log(`pronto: ${out}`);

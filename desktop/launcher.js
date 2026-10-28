@@ -302,6 +302,25 @@ function dialog(message, actionLabel = null) {
   return false;
 }
 
+/**
+ * Erro fatal com código (tabela em desktop/bootstrap/MotionStudio.cs → ERRORS).
+ * Aberto pelo "Motion Studio.exe" (MS_BOOTSTRAP=1): grava logs/last-error.json e
+ * a janela de erro do bootstrap mostra código, mensagem e log. Direto: diálogo.
+ * Com actionLabel o diálogo é sempre daqui (tem botão de ação) e o arquivo só registra.
+ */
+let errorFile = null;
+function fatal(code, message, actionLabel = null) {
+  const viaBootstrap = process.env.MS_BOOTSTRAP === '1';
+  const shown = !viaBootstrap || Boolean(actionLabel);
+  let go = false;
+  if (shown) go = dialog(`${message}\n\nCódigo do erro: ${code}`, actionLabel);
+  else console.error(`[Launcher] ${code}: ${message.replace(/\n/g, ' ')}`);
+  try {
+    if (errorFile) fs.writeFileSync(errorFile, JSON.stringify({ code, message, shown, at: new Date().toISOString() }));
+  } catch (_) { /* sem pasta de logs */ }
+  return go;
+}
+
 function execTextLong(cmd, args) {
   try {
     return cp.execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
@@ -354,6 +373,8 @@ async function main() {
   const appDir  = resolveAppDir();
   const dataDir = resolveDataDir();
   fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
+  errorFile = path.join(dataDir, 'logs', 'last-error.json');
   hideChildConsoles();
 
   const profileDir   = path.join(dataDir, 'firefox-profile');
@@ -369,7 +390,7 @@ async function main() {
   const wanted = process.env.MS_BROWSER || (saved.browser === 'firefox' ? 'firefox' : 'chrome');
   let browserKind = (wanted === 'firefox' && firefox) || !chromeBrowser ? 'firefox' : 'chrome';
   if (browserKind === 'firefox' && !firefox) {
-    const go = dialog('O Motion Studio precisa do Google Chrome (ou do Firefox) para abrir o editor, e nenhum dos dois foi encontrado.\nInstale o Chrome e abra o Motion Studio de novo.', 'Baixar Chrome');
+    const go = fatal('MS-610', 'O Motion Studio precisa do Google Chrome, do Edge ou do Firefox para abrir o editor, e nenhum foi encontrado.\nInstale o Chrome e abra o Motion Studio de novo.', 'Baixar Chrome');
     if (go) openExternal(CHROME_DOWNLOAD);
     process.exit(1);
   }
@@ -397,7 +418,7 @@ async function main() {
   const port = await pickPort(Number(process.env.PORT) || state.port || 3001);
   const whisperPort = await pickPort(Number(process.env.WHISPER_PORT) || 9099);
   if (!port || !whisperPort) {
-    dialog('Não há porta de rede livre para iniciar o Motion Studio. Feche outros programas e tente de novo.');
+    fatal('MS-620', 'Não há porta de rede livre para iniciar o Motion Studio. Feche outros programas e tente de novo.');
     process.exit(1);
   }
   fs.writeFileSync(stateFile, JSON.stringify({ ...state, port }));
@@ -428,7 +449,7 @@ async function main() {
   let switching = false;  // trocando Chrome → Firefox: o Chrome fechar não encerra o app
   let shuttingDown = false;
 
-  const shutdown = reason => {
+  const shutdown = (reason, exitCode = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[Launcher] Encerrando: ${reason}`);
@@ -438,7 +459,7 @@ async function main() {
       else ff.kill('SIGTERM');
     }
     // index.js encerra o Whisper no 'exit'
-    setTimeout(() => process.exit(0), 300);
+    setTimeout(() => process.exit(exitCode), 300);
   };
 
   process.on('motion-studio:presence', n => {
@@ -458,12 +479,13 @@ async function main() {
     createRequire(path.join(appDir, 'index.js'))('./index.js');
   } catch (err) {
     console.error(err);
-    dialog(`O servidor do Motion Studio não iniciou:\n${err.message}\n\nDetalhes em ${logFile}`);
+    const missing = err.code === 'MODULE_NOT_FOUND' ? '\n\nFaltam pacotes: abra pelo "Motion Studio.exe" (ele instala) ou rode npm install.' : '';
+    fatal('MS-630', `O servidor do Motion Studio não iniciou:\n${err.message}${missing}\n\nDetalhes em ${logFile}`);
     process.exit(1);
   }
   const url = `http://localhost:${port}/`;
   if (!await waitHttp(`http://127.0.0.1:${port}/desktop.js`, 60000)) {
-    dialog(`O servidor do Motion Studio não respondeu.\nDetalhes em ${logFile}`);
+    fatal('MS-631', `O servidor do Motion Studio não respondeu em 60 s.\nDetalhes em ${logFile}`);
     process.exit(1);
   }
   const writeInstance = () => fs.writeFileSync(instanceFile, JSON.stringify({ pid: process.pid, port, browser: browserKind }));
@@ -478,8 +500,8 @@ async function main() {
     const proc = openWindow(kind, url, extra);
     ff = proc;
     proc.on('error', err => {
-      dialog(`Não foi possível abrir o ${label(kind)}:\n${err.message}`);
-      shutdown(`falha ao abrir o ${label(kind)}`);
+      fatal('MS-640', `Não foi possível abrir o ${label(kind)}:\n${err.message}`);
+      shutdown(`falha ao abrir o ${label(kind)}`, 1);
     });
     proc.on('exit', code => {
       console.log(`[Launcher] ${label(kind)} saiu (código ${code})`);
@@ -531,7 +553,7 @@ async function main() {
 
 main().catch(err => {
   console.error('[Launcher] Erro fatal:', err);
-  dialog(`Erro ao iniciar o Motion Studio:\n${err.message}`);
+  fatal('MS-699', `Erro ao iniciar o Motion Studio:\n${err.message}`);
   process.exit(1);
 });
 // #endregion

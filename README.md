@@ -42,6 +42,13 @@ Crie `config/ai.local.json` com suas credenciais. Esse arquivo está no `.gitign
 
 ## Executando
 
+**Windows, sem instalar nada antes:** abra o `Motion Studio.exe` na pasta do
+projeto. Na primeira vez ele baixa o Node.js (se faltar), instala os pacotes,
+o FFmpeg e o Python da transcrição, e abre o editor. Erros aparecem numa
+janela com código (tabela em [desktop/bootstrap/README.md](desktop/bootstrap/README.md)).
+
+Pelo terminal:
+
 ```bash
 npm start          # servidor + interface
 npm run desktop    # app desktop

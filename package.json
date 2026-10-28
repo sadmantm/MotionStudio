@@ -8,6 +8,7 @@
         "desktop": "node desktop/launcher.js",
         "desktop:build": "node desktop/build.js",
         "desktop:stub": "node desktop/build-stub.js",
+        "desktop:bootstrap": "node desktop/build-bootstrap.js",
         "postinstall": "node desktop/ffmpeg.js --optional",
         "ffmpeg:update": "node desktop/ffmpeg.js --force"
     },
