@@ -113,6 +113,50 @@ function register(app, { ffmpegPath, saveUpload }) {
       if (!res.headersSent) res.status(err.status || 500).json({ error: err.message });
     }
   });
+
+  /**
+   * POST /api/video/speed?ext=mp4&speed=1.5   Body: vídeo ORIGINAL
+   * → o vídeo em outra velocidade, com o áudio junto (atempo: sem mudar o tom).
+   * WebM continua WebM (VP9, mantém o alfa); o resto sai MP4 H.264.
+   * Usado pelo "Tempo de animação" dos clips de vídeo (Interface/clip-speed.js).
+   */
+  app.post('/api/video/speed', async (req, res) => {
+    const ext = String(req.query.ext || 'mp4').replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'mp4';
+    const speed = Math.round(clamp(num(req.query.speed, 1), 0.25, 4) * 100) / 100;
+    const webm = ext === 'webm';
+    const tag = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const input  = path.join(os.tmpdir(), `ms_vspd_${tag}_in.${ext}`);
+    const output = path.join(os.tmpdir(), `ms_vspd_${tag}_out.${webm ? 'webm' : 'mp4'}`);
+    const cleanup = () => { fs.rm(input, { force: true }, () => {}); fs.rm(output, { force: true }, () => {}); };
+
+    const video = webm
+      ? ['-filter:v', `setpts=PTS/${speed}`, '-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '30', '-deadline', 'good', '-cpu-used', '4', '-pix_fmt', 'yuva420p', '-auto-alt-ref', '0']
+      : ['-filter:v', `setpts=PTS/${speed},scale=trunc(iw/2)*2:trunc(ih/2)*2`, '-c:v', 'libx264', '-crf', '18', '-preset', 'veryfast', '-pix_fmt', 'yuv420p'];
+    const audio = ['-map', '0:a:0', '-filter:a', atempoChain(speed).join(',') || 'anull', ...(webm ? ['-c:a', 'libopus', '-b:a', '160k'] : ['-c:a', 'aac', '-b:a', '192k'])];
+    const tail = webm ? [output] : ['-movflags', '+faststart', output];
+    const base = ['-hide_banner', '-nostdin', '-y', '-i', input, '-map', '0:v:0', ...video];
+    const run = args => new Promise((resolve, reject) => {
+      execFile(ffmpegPath(), args, { maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, _out, stderr) => {
+        if (!err && fs.existsSync(output) && fs.statSync(output).size) resolve();
+        else reject(Object.assign(new Error('O ffmpeg não conseguiu mudar a velocidade do vídeo.'), { detail: String(stderr || '').slice(-600) }));
+      });
+    });
+
+    try {
+      await saveUpload(req, input);
+      if (!fs.statSync(input).size) throw Object.assign(new Error('Arquivo vazio.'), { status: 400 });
+      const started = Date.now();
+      // Vídeo sem faixa de áudio: o -map 0:a:0 falha e sai só a imagem
+      await run([...base, ...audio, ...tail]).catch(() => run([...base, '-an', ...tail]));
+      console.log(`[Vídeo] Velocidade ${speed}× em ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      res.type(webm ? 'video/webm' : 'video/mp4');
+      res.sendFile(output, cleanup);
+    } catch (err) {
+      cleanup();
+      console.error('[Vídeo] Velocidade falhou:', err.message, err.detail || '');
+      if (!res.headersSent) res.status(err.status || 500).json({ error: err.message });
+    }
+  });
 }
 
 module.exports = { register, buildFilter, normalizeFx, atempoChain };

@@ -241,6 +241,54 @@
       .sort((a, b) => a.t - b.t);
   }
 
+  // #region Arranjo (tempos que a IA erra)
+  const RISER_RE = /riser|rise|build|swell|tension|uplift/;
+  const HEAVY_RE = /impact|hit|slam|boom|thud|punch|drop|crash|stomp|sub|bass|heavy|denied|error|fail/;
+  const cueName = c => (c.sound || '').split('/')[1] || '';
+  const isRiser = c => c.type === 'riser' || (c.type === 'sample' && RISER_RE.test(cueName(c)));
+  const isHeavy = c => !isRiser(c) && (c.type === 'impact' || c.type === 'bass' || (c.type === 'sample' && HEAVY_RE.test(cueName(c))));
+  const STACK_WINDOW = 0.15;   // dois sons fortes mais próximos que isso se embolam
+
+  /**
+   * As deixas declaram segundos sem olhar a duração de cada som. Aqui:
+   *  - o riser termina exatamente no impacto seguinte (antes começava tarde e
+   *    passava do impacto, ou era cortado por ele no meio da subida);
+   *  - sons fortes a menos de STACK_WINDOW viram uma batida só (mesmo t).
+   * span(cue) → { start, peak }: quando o som começa e chega ao ápice.
+   */
+  function arrangeCues(cues, span) {
+    const out = cues.map(c => ({ ...c }));
+    const heavy = out.filter(isHeavy);
+
+    out.forEach(r => {
+      if (!isRiser(r)) return;
+      const { start, peak } = span(r);
+      const hit = heavy.find(h => h.t > start + 0.1 && h.t <= peak + 1);
+      if (!hit || Math.abs(hit.t - peak) < 0.01) return;
+      const shift = hit.t - peak;
+      r.t += shift;
+      if (r.type === 'riser') {
+        // Sem espaço antes do 0: a subida encurta, mas ainda acaba no impacto
+        if (r.t < 0) { r.dur = Math.max(0.2, r.dur + r.t); r.t = Math.max(0, hit.t - r.dur); }
+      } else if (r.dur > 0 && r.dur < hit.t - (start + shift)) {
+        r.dur = 0;   // o corte (dur) cairia antes do ápice
+      }
+    });
+
+    out.sort((a, b) => a.t - b.t);
+    for (let i = 0; i < out.length; i++) {
+      if (!isHeavy(out[i])) continue;
+      for (let j = i + 1; j < out.length && out[j].t - out[i].t < STACK_WINDOW; j++) {
+        if (!isHeavy(out[j])) continue;
+        // O mais fraco vai para o instante do mais forte: reforça em vez de embolar
+        const [strong, weak] = out[j].gain > out[i].gain ? [out[j], out[i]] : [out[i], out[j]];
+        weak.t = strong.t;
+      }
+    }
+    return out.sort((a, b) => a.t - b.t);
+  }
+  // #endregion
+
   // #region Biblioteca externa
   let libraryPromise = null;
   const sampleBytes = new Map();   // url → ArrayBuffer (cópia; decodeAudioData consome o original)
@@ -334,6 +382,16 @@
       }));
     }
 
+    // Ápice de cada som: sintetizado = fim de dur; sfxkit = ponto de sincronia
+    // (o t da deixa); demais arquivos = fim do arquivo
+    cues = arrangeCues(cues, c => {
+      if (c.type !== 'sample') return { start: c.t, peak: c.t + c.dur };
+      const sync = (external.has(c.sound) ? 0 : sampleMeta.get(c.sound)?.sync || 0) / c.pitch;
+      if (sync > 0) return { start: c.t - sync, peak: c.t };
+      const len = (samples.get(c.sound)?.duration || 0) / c.pitch;
+      return { start: c.t, peak: c.t + (c.dur > 0 ? Math.min(c.dur, len) : len) };
+    });
+
     let used = 0;
     let skipped = 0;
     for (const cue of cues) {
@@ -411,8 +469,34 @@
   }
 
   /**
+   * Erro do clipe ao buscar alguns quadros (null = anima). MS.motion engole
+   * a exceção do render e só a registra em console.error, então o console
+   * também conta.
+   */
+  function probeSeek(win) {
+    const M = win?.Motion;
+    if (typeof M?.seek !== 'function') return null;
+    const d = Number(M.config?.durationInSeconds) || 1;
+    const original = win.console.error;
+    let error = null;
+    win.console.error = (...args) => {
+      error = error || args.map(a => a?.message || String(a)).join(' ');
+      original.apply(win.console, args);
+    };
+    try {
+      [0, d * 0.5, d * 0.95, 0].forEach(t => M.seek(t));
+    } catch (err) {
+      error = error || String(err?.message || err);
+    } finally {
+      win.console.error = original;
+    }
+    return error;
+  }
+
+  /**
    * Lê window.Motion.sfx rodando o HTML num iframe invisível (o array pode ser
    * calculado pelo script do clipe). Aceita array ou função que devolve array.
+   * Se o seek quebra, devolve [] com .error: som sobre animação parada não vale.
    */
   function readCues(html, { timeout = 10000 } = {}) {
     return new Promise(resolve => {
@@ -422,12 +506,13 @@
       iframe.tabIndex = -1;
       iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:64px;height:64px;border:0;visibility:hidden;pointer-events:none';
       let done = false;
-      const finish = cues => {
+      const finish = (cues, error = null) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
         iframe.remove();
-        resolve(normalizeCues(cues));
+        if (error) console.warn('[SFX] o clipe quebra ao animar; sons ignorados:', error);
+        resolve(error ? Object.assign([], { error }) : normalizeCues(cues));
       };
       const timer = setTimeout(() => finish(read()), timeout);
       const read = () => {
@@ -443,13 +528,14 @@
           const ready = iframe.contentWindow?.Motion?.whenReady?.();
           await Promise.race([Promise.resolve(ready).catch(() => {}), new Promise(r => setTimeout(r, 4000))]);
         } catch (_) { /* clipe sem whenReady */ }
-        finish(read());
+        const cues = read();
+        finish(cues, Array.isArray(cues) && cues.length ? probeSeek(iframe.contentWindow) : null);
       }, { once: true });
       iframe.srcdoc = window.ClipHost ? window.ClipHost.injectRuntime(html) : html;
       document.body.appendChild(iframe);
     });
   }
 
-  window.MotionSFX = { TYPES, normalizeCues, render, toWav, readCues, loadLibrary, addExternal };
+  window.MotionSFX = { TYPES, normalizeCues, arrangeCues, render, toWav, readCues, loadLibrary, addExternal };
   // #endregion
 })();

@@ -120,3 +120,42 @@
 .vr-btn-play.is-on { border-color: var(--accent); color: var(--accent); }
 
 .tool-btn-rec:hover { color: #ff5a6a; }
+
+/* #region Clip ao vivo na timeline (gravando) */
+.vr-live-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  z-index: 6;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 90, 106, .9);
+  border-radius: 5px;
+  background: rgba(255, 90, 106, .16);
+  box-shadow: 0 0 0 1px rgba(255, 90, 106, .25), 0 0 12px rgba(255, 90, 106, .25);
+  overflow: hidden;
+  pointer-events: none;
+}
+.vr-live-clip.is-review {
+  border-color: rgba(120, 200, 255, .9);
+  background: rgba(120, 200, 255, .14);
+  box-shadow: none;
+}
+.vr-live-clip canvas {
+  position: absolute;
+  top: 0;
+  height: 100%;
+}
+.vr-live-label {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* #endregion */

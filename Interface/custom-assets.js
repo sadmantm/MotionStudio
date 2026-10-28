@@ -8,6 +8,8 @@
 //    efeito     → clip HTML de sobreposição esticado sobre o clip selecionado
 //    transição  → clip HTML de sobreposição centrado no corte (clip anterior → selecionado)
 //    texto      → template do TextRegistry, igual aos de text-templates/ ({{text}}, {{color}}…)
+//  "Salvar no catálogo do app" grava em catalog/ (versionado, entra no commit);
+//  "Salvar na biblioteca" grava só para quem usa (custom-assets/, fora do git).
 
 (() => {
   const API = '/api/custom-assets';
@@ -60,7 +62,7 @@
       reg.addSource({
         id: i.id,
         name: i.name,
-        desc: 'Criado por você',
+        desc: i.builtin ? 'Catálogo do app' : 'Criado por você',
         category: i.category,
         defaults: { ...TEXT_DEFAULTS, ...(i.defaults || {}) },
         custom: true,
@@ -116,7 +118,8 @@
               <img class="cx-frame" alt="" hidden>
             </span>
             <span class="fx-card-name">${esc(item.name)}</span>
-            <button class="cx-del" data-cx-del="${esc(item.id)}" title="Excluir da biblioteca">✕</button>
+            ${item.builtin ? '<span class="cx-badge" title="Catálogo do app (catalog/, versionado)">APP</span>' : ''}
+            <button class="cx-del" data-cx-del="${esc(item.id)}" title="${item.builtin ? 'Excluir do catálogo do app' : 'Excluir da biblioteca'}">✕</button>
           </div>`).join('')}
       </div>`;
     items.forEach(item => loadFrames(item).then(() => paintStill(box.querySelector(`[data-cx-id="${CSS.escape(item.id)}"]`), item)));
@@ -257,16 +260,17 @@
     S.items = S.items.filter(i => i.id !== id);
     syncTextRegistry();
     renderAll();
-    status(`"${item.name}" excluído da biblioteca`);
+    const from = item.builtin ? 'do catálogo do app' : 'da biblioteca';
+    status(`"${item.name}" excluído ${from}`);
     // Sem pergunta: Desfazer recria o item (clips já colocados na timeline nunca saíram do projeto)
     window.MSUI.toast({
-      message: `“${item.name}” excluído da biblioteca.`,
+      message: `“${item.name}” excluído ${from}.`,
       kind: 'info',
       duration: 8000,
       action: {
         label: 'Desfazer',
         onClick: async () => {
-          const back = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: item.kind, name: item.name, html: item.html, defaults: item.defaults }) });
+          const back = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: item.kind, name: item.name, html: item.html, defaults: item.defaults, scope: item.builtin ? 'app' : 'user' }) });
           if (!back.ok) return window.MSUI.notify('Não foi possível restaurar.');
           await reload();
         },
@@ -497,6 +501,7 @@
         <div class="modal-footer">
           <span class="cx-msg" id="cxMsg"></span>
           <button class="btn-secondary" data-cx="close">Cancelar</button>
+          <button class="btn-secondary" data-cx="save-app" title="Grava em catalog/ no código do app: vem embutido para todos e pode entrar no commit">Salvar no catálogo do app</button>
           <button class="export-btn" data-cx="save">Salvar na biblioteca</button>
         </div>
       </div>`;
@@ -515,6 +520,7 @@
       if (action === 'close') closeModal();
       if (action === 'generate') generate();
       if (action === 'save') save();
+      if (action === 'save-app') save('app');
       if (action === 'base') insertBase();
       if (action === 'use-clip') useSelectedClip();
       if (action === 'play') togglePlay();
@@ -789,18 +795,18 @@
     }
   }
 
-  async function save() {
+  async function save(scope = 'user') {
     const html = ($m('#cxHtml').value || M.html).trim();
     const name = $m('#cxName').value.trim();
     if (!html) return msg('Gere com a IA ou cole um HTML primeiro.', 'error');
     if (!name) { $m('#cxName').focus(); return msg('Dê um nome.', 'error'); }
-    const button = $m('[data-cx="save"]');
+    const button = $m(scope === 'app' ? '[data-cx="save-app"]' : '[data-cx="save"]');
     button.disabled = true;
     try {
       const resp = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: M.kind, name, html, defaults: M.kind === 'text' ? TEXT_DEFAULTS : undefined }),
+        body: JSON.stringify({ kind: M.kind, name, html, scope, defaults: M.kind === 'text' ? TEXT_DEFAULTS : undefined }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) return msg(data.error || `Erro ${resp.status}`, 'error');
@@ -809,7 +815,9 @@
       renderAll();
       closeModal();
       document.querySelector(`.ptab[data-tab="${KIND[data.kind].ptab}"]`)?.click();
-      status(`"${data.name}" salvo em ${KIND[data.kind].section}${data.warnings?.length ? ` · avisos: ${data.warnings.join('; ')}` : ''}`);
+      const where = data.builtin ? `no catálogo do app (${data.path})` : `em ${KIND[data.kind].section}`;
+      status(`"${data.name}" salvo ${where}${data.warnings?.length ? ` · avisos: ${data.warnings.join('; ')}` : ''}`);
+      if (data.builtin) window.MSUI.toast({ message: `“${data.name}” salvo em ${data.path} — entra no próximo commit.`, kind: 'info', duration: 6000 });
     } catch (err) {
       msg(err.message, 'error');
     } finally {

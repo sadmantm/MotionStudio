@@ -132,3 +132,32 @@
   background: var(--accent);
 }
 /* #endregion */
+
+/* #region Régua e agulha sempre visíveis (rolagem vertical das tracks) */
+#tlRuler {
+  position: sticky;
+  top: 0;
+  z-index: 24;             /* acima dos clips, abaixo da agulha (25) */
+}
+#tlLabels .tl-ruler-corner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+/* #endregion */
+
+/* #region Largura da coluna das tracks (arrastável) */
+#tlLabelsResize {
+  flex: 0 0 5px;
+  margin: 0 -2px;
+  position: relative;
+  z-index: 30;
+  cursor: col-resize;
+  background: transparent;
+  transition: background .12s;
+}
+#tlLabelsResize:hover,
+#tlLabelsResize.is-dragging { background: var(--accent); }
+body.is-resizing-labels,
+body.is-resizing-labels * { cursor: col-resize !important; user-select: none !important; }
+/* #endregion */

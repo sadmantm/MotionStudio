@@ -184,6 +184,130 @@
   const btn = (action, label, content, extra = '') =>
     `<button type="button" class="grp-btn" data-grp="${action}" title="${label}" aria-label="${label}" ${extra}>${content}</button>`;
 
+  // #region Áudio e velocidade em grupo
+  const hasSound = c => ['audio', 'video'].includes(typeOf(c));
+  const isAudioFile = c => window.MSAudioTools?.originOf(appState().templates.find(t => t.id === c.templateId))?.type === 'audio';
+  /** Valor comum a todos ou null (misto) */
+  const common = (list, read) => {
+    const values = list.map(read);
+    return values.every(v => (typeof v === 'number' ? Math.abs(v - values[0]) < 0.005 : v === values[0])) ? values[0] : null;
+  };
+  const MIXED = 'misto';
+
+  function renderAudioSection(all) {
+    const sound = all.filter(hasSound);
+    if (!sound.length) return '';
+    const st = appState();
+    const vol = common(sound, c => Math.max(0, Math.min(1, window.ClipKF?.valueAt(c, 'volume', st.time) ?? Number(c.volume ?? 1))));
+    const muted = common(sound, c => Boolean(c.muted));
+    const fadeIn = common(sound, c => Number(c.fadeIn) || 0);
+    const fadeOut = common(sound, c => Number(c.fadeOut) || 0);
+    const files = sound.filter(isAudioFile);
+    const fxs = files.map(c => window.MSAudioTools.fxOf(c));
+    const fx = key => common(fxs, f => key.split('.').reduce((o, k) => o[k], f));
+    const pitch = files.length ? fx('pitch') : null;
+    const lowcut = files.length ? fx('lowcut') : null;
+    const denoise = files.length ? fx('denoise.on') : null;
+    const level = files.length ? fx('level') : null;
+    const shown = vol == null ? 100 : Math.round(vol * 100);
+    return `
+      <div class="prop-section grp-panel grp-audio">
+        <div class="prop-title fx-title">Áudio · ${sound.length} clip(s)
+          <button class="fx-clear" data-grp-audio-reset title="Volume 100%, sem mudo e sem fades em todos">padrão</button>
+        </div>
+        <div class="prop-row">
+          <label>Volume</label>
+          <input type="range" min="0" max="100" step="1" value="${shown}" class="prop-range" data-grp-audio="volume" data-default="100">
+          <span class="prop-val" data-grp-audio-val style="min-width:34px;text-align:right">${vol == null ? MIXED : `${shown}%`}</span>
+        </div>
+        <div class="prop-row">
+          <label>Mudo</label>
+          <input type="checkbox" data-grp-audio="muted"${muted ? ' checked' : ''}>
+          ${muted == null ? `<span class="prop-val">${MIXED}</span>` : ''}
+        </div>
+        <div class="prop-row">
+          <label>Fade in (s)</label>
+          <input type="number" class="prop-input" min="0" step="0.1" data-grp-audio="fadeIn" value="${fadeIn ?? ''}" placeholder="${MIXED}">
+        </div>
+        <div class="prop-row">
+          <label>Fade out (s)</label>
+          <input type="number" class="prop-input" min="0" step="0.1" data-grp-audio="fadeOut" value="${fadeOut ?? ''}" placeholder="${MIXED}">
+        </div>
+        ${files.length ? `
+        <div class="grp-hint">Voz nos ${files.length} clip(s) de áudio — cada um mantém o que não for mudado aqui:</div>
+        <div class="prop-row">
+          <label title="Semitons">Tom</label>
+          <input type="number" class="prop-input" min="-12" max="12" step="0.5" data-grp-fx="pitch" value="${pitch ?? ''}" placeholder="${MIXED}">
+        </div>
+        <div class="prop-row">
+          <label title="Remove chiado e ruído de fundo constante">Redutor de ruído</label>
+          <input type="checkbox" data-grp-fx="denoise.on"${denoise ? ' checked' : ''}>
+          ${denoise == null ? `<span class="prop-val">${MIXED}</span>` : ''}
+        </div>
+        <div class="prop-row">
+          <label title="Hz (voz: 80–120)">Corte de graves</label>
+          <input type="number" class="prop-input" min="0" max="300" step="5" data-grp-fx="lowcut" value="${lowcut ?? ''}" placeholder="${MIXED}">
+        </div>
+        <div class="prop-row">
+          <label title="Equilibra partes baixas e altas da fala">Nivelar voz</label>
+          <input type="checkbox" data-grp-fx="level"${level ? ' checked' : ''}>
+          ${level == null ? `<span class="prop-val">${MIXED}</span>` : ''}
+        </div>` : ''}
+      </div>`;
+  }
+
+  function renderSpeedSection(all) {
+    const timed = all.filter(c => window.MSClipSpeed?.kindOf(c));
+    if (!timed.length) return '';
+    const speed = common(timed, c => Math.round(window.MSClipSpeed.speedOf(c) * 100) / 100);
+    return `
+      <div class="prop-section grp-panel">
+        <div class="prop-title">Tempo · ${timed.length} clip(s)</div>
+        <div class="grp-row">
+          ${[0.5, 0.75, 1, 1.25, 1.5, 2].map(v => btn('speed', `Velocidade ${v}×`, `${v}×`, `data-value="${v}"${v === speed ? ' data-on' : ''}`)).join('')}
+        </div>
+        <div class="grp-row">
+          <label class="grp-inline"><input type="number" class="prop-input" data-grp-field="speed" min="0.25" max="4" step="0.05" value="${speed ?? ''}" placeholder="${MIXED}">×</label>
+        </div>
+        <div class="grp-hint">HTML estica a animação; vídeo e áudio são reprocessados com o som junto.</div>
+      </div>`;
+  }
+
+  const soundIds = () => selectedClips().filter(hasSound).map(c => c.id);
+  const timedIds = () => selectedClips().filter(c => window.MSClipSpeed?.kindOf(c)).map(c => c.id);
+
+  /** Volume ao vivo (slider): só o número muda; o painel é refeito no change */
+  function onAudioInput(e) {
+    const el = e.target.closest('[data-grp-audio="volume"]');
+    if (!el) return;
+    window.setClipsAudio?.(soundIds(), 'volume', el.value, { live: true });
+    const val = el.closest('.grp-audio')?.querySelector('[data-grp-audio-val]');
+    if (val) val.textContent = `${el.value}%`;
+  }
+
+  /** → true quando o evento era de áudio/velocidade */
+  function onAudioChange(e) {
+    const audio = e.target.dataset?.grpAudio;
+    if (audio) {
+      if (e.target.type !== 'checkbox' && e.target.value === '') return true;
+      window.setClipsAudio?.(soundIds(), audio, e.target.type === 'checkbox' ? e.target.checked : e.target.value);
+      return true;
+    }
+    const fx = e.target.dataset?.grpFx;
+    if (fx) {
+      if (e.target.type !== 'checkbox' && e.target.value === '') return true;
+      const value = e.target.type === 'checkbox' ? e.target.checked : Number(e.target.value);
+      Promise.resolve(window.MSAudioTools?.applyField(soundIds(), fx, value)).then(() => window.renderProjectSettings?.());
+      return true;
+    }
+    if (e.target.dataset?.grpField === 'speed') {
+      if (e.target.value !== '') window.MSClipSpeed?.setSpeed(timedIds(), e.target.value);
+      return true;
+    }
+    return false;
+  }
+  // #endregion
+
   window.__renderGroupProps = function renderGroupProps(container) {
     const all = selectedClips();
     const visual = all.filter(c => typeOf(c) !== 'audio');
@@ -239,6 +363,8 @@
           ${btn('distribute', 'Distribuir na vertical (3+ clips)', icon('distY'), `data-value="y" ${canDistribute}`)}
         </div>
       </div>` : ''}
+      ${renderAudioSection(all)}
+      ${renderSpeedSection(all)}
       <div class="prop-section grp-panel">
         <div class="prop-title">Faixa</div>
         <div class="grp-row">
@@ -259,6 +385,10 @@
   let toFrame = false;
 
   function onPanelClick(e) {
+    if (e.target.closest('[data-grp-audio-reset]')) {
+      window.setClipsAudio?.(soundIds(), { volume: 100, muted: false, fadeIn: 0, fadeOut: 0 });
+      return;
+    }
     const el = e.target.closest('[data-grp]');
     if (!el || el.disabled) return;
     const value = el.dataset.value;
@@ -269,6 +399,7 @@
       case 'center':     return ops.centerInFrame();
       case 'distribute': return ops.distribute(value);
       case 'track':      return window.moveSelectedToTrack?.(Number(value));
+      case 'speed':      return window.MSClipSpeed?.setSpeed(timedIds(), Number(value));
       case 'aisfx':      return window.__aiSfxForClips?.(window.__getSelectedClipIds?.() || []);
       case 'duplicate':  return window.duplicateSelectedClips?.();
       case 'delete':     return window.deleteSelectedClips?.();
@@ -276,6 +407,7 @@
   }
 
   function onPanelChange(e) {
+    if (onAudioChange(e)) return;
     const field = e.target.dataset?.grpField;
     if (!field) return;
     if (field === 'toFrame') { toFrame = e.target.checked; return; }
@@ -297,6 +429,7 @@
     panel.__grpBound = true;
     panel.addEventListener('click', onPanelClick);
     panel.addEventListener('change', onPanelChange);
+    panel.addEventListener('input', onAudioInput);
     panel.addEventListener('keydown', e => {
       if (e.key === 'Enter' && e.target.dataset?.grpField) e.target.blur();
     });

@@ -6,6 +6,9 @@ const DEFAULT_SCENE_DURATION = 8;
 const MIN_CLIP_DURATION      = 0.2;
 const SNAP_TOLERANCE_PX      = 10;
 const PX_PER_SEC             = 80;
+// Zoom horizontal da timeline: 0,01 → 0,8 px/s (1 h ≈ 2900 px); 60 → 4800 px/s (1 quadro a 30 fps ≈ 160 px)
+const TL_ZOOM_MIN            = 0.01;
+const TL_ZOOM_MAX            = 60;
 const TRACK_HEIGHT           = 64; // altura de cada track (px) — usado p/ thumbnails
 
 const SCENE_COLORS = [
@@ -1231,8 +1234,8 @@ function applyProjectPayload(payload, fallbackName = '') {
 
   state.zoom = clamp(
     Number(editor.zoom) || 1,
-    0.1,
-    16
+    TL_ZOOM_MIN,
+    TL_ZOOM_MAX
   );
 
   state.trackZoom = clamp(
@@ -2219,6 +2222,11 @@ function openPasteHtmlModal(
     'create'
   );
 
+  // Menu de contexto da timeline: o clip entra onde o usuário clicou
+  const pasteState = getPasteHtmlEditorState();
+  pasteState.at = Number.isFinite(normalizedOptions.at) ? normalizedOptions.at : null;
+  pasteState.trackIndex = Number.isFinite(normalizedOptions.trackIndex) ? normalizedOptions.trackIndex : null;
+
   setPasteModalTitle(
     'Adicionar Clip via HTML'
   );
@@ -2705,7 +2713,10 @@ async function confirmPasteHtml() {
               `${cleanName}.html`,
             html,
           },
-        ]);
+        ], {
+          at: editorState.at ?? null,
+          trackIndex: editorState.trackIndex ?? null,
+        });
 
       if (
         !addedClipIds?.length
@@ -3399,15 +3410,18 @@ function renderProjectSettings() {
                   </div>
 
                   <div class="prop-row">
-                    <label>Velocidade</label>
+                    <label title="Também no menu de contexto do clip: Tempo de animação">Velocidade</label>
 
-                    <span class="prop-val">
-                      ${
-                        clip.fitAnimationToClip
-                          ? `${animationSpeed.toFixed(2)}×`
-                          : '1.00×'
-                      }
-                    </span>
+                    <input
+                      type="number"
+                      class="prop-input"
+                      min="0.25"
+                      max="4"
+                      step="0.05"
+                      value="${(clip.fitAnimationToClip ? animationSpeed : 1).toFixed(2)}"
+                      onchange="window.MSClipSpeed?.setSpeed(['${clip.id}'], this.value)"
+                    >
+                    <span class="prop-val">×</span>
                   </div>
 
                   <div
@@ -3949,9 +3963,9 @@ function zoomTimelineByWheel(e) {
   const timeUnderMouse = (timelineScroll.scrollLeft + mouseX) / oldPxPerSec;
 
   // Pinça do trackpad manda deltas pequenos e contínuos; roda manda ±100
-  const factor = Math.exp(-clamp(e.deltaY, -60, 60) * 0.004);
+  const factor = Math.exp(-clamp(e.deltaY, -60, 60) * 0.006);
 
-  state.zoom = clamp(oldZoom * factor, 0.1, 16);
+  state.zoom = clamp(oldZoom * factor, TL_ZOOM_MIN, TL_ZOOM_MAX);
 
   if (zoomLabel) {
     zoomLabel.textContent = Math.round(state.zoom * 100) + '%';
@@ -4086,6 +4100,7 @@ window.__appState         = state;
 window.__fmtTime          = fmtTime;
 window.__clamp            = clamp;
 window.__PX_PER_SEC       = PX_PER_SEC;
+window.__TL_ZOOM          = { min: TL_ZOOM_MIN, max: TL_ZOOM_MAX };
 window.__renderSceneList  = renderSceneList;
 window.__renderProps      = renderProjectSettings;
 window.__highlightScene   = (idx) => {

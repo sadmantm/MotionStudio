@@ -424,11 +424,26 @@
       { id: 'text', icon: ICONS.text, label: 'Texto', run: () => addText(at) },
       { sep: true },
       { label: 'Colar aqui', disabled: !hasClip, run: () => { window.seekTo?.(at.t); window.__runTimelineAction?.('paste'); } },
+      { label: 'Colar clipe HTML', hint: 'da área de transferência', run: () => pasteHtmlAt(at) },
       { label: 'Selecionar todos', run: () => window.__runTimelineAction?.('selectAll') },
       { label: 'Adicionar marcador aqui', run: () => { window.__tlPushUndo?.(); window.MSMarkers?.add({ t: at.t }); window.MSMarkers?.render(); } },
       { label: 'Adicionar track', run: () => window.__runTimelineAction?.('addTrack') },
       { label: 'Ajustar a timeline à tela', run: () => window.__runTimelineAction?.('zoomFit') },
     ];
+  }
+
+  /**
+   * HTML da área de transferência vira clip no ponto/track clicados. Sem HTML
+   * (ou sem permissão de leitura) abre o modal de colar já com a posição.
+   */
+  async function pasteHtmlAt(at) {
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch (_) { /* sem permissão: o modal recebe o Ctrl+V */ }
+    const where = { at: at.t, trackIndex: at.track };
+    if (!window.isHtmlSource?.(text)) return window.openPasteHtmlModal?.(where);
+    const title = (/<title[^>]*>([^<]*)<\/title>/i.exec(text) || [])[1]?.replace(/[\/:*?"<>|]+/g, '-').trim();
+    const ids = await window.loadScenes?.([{ type: 'html', name: `${title || 'Clip HTML'}.html`, html: text }], where);
+    if (ids?.length) window.MSUI.toast({ message: 'Clipe HTML colado na timeline.', kind: 'info' });
   }
 
   function addText(at) {
@@ -547,12 +562,35 @@
       if (cam) window.MSCameraAI?.open(cam.id);
     });
 
+    // Velocidade de HTML, vídeo e áudio (clip-speed.js)
+    const speedItem = document.createElement('div');
+    speedItem.className = 'ctx-item ly-blend-item';
+    speedItem.id = 'ctxSpeed';
+    speedItem.innerHTML = `${ICON('<circle cx="12" cy="13" r="8"/><path d="M12 13l3.5-3.5M9 2h6"/>')}<span class="ly-label">Tempo de animação</span><span class="ly-arrow">▸</span>`;
+    menuEl.insertBefore(speedItem, item);
+    const speedIds = () => selectedClips().filter(c => window.MSClipSpeed?.kindOf(c)).map(c => c.id);
+    speedItem.addEventListener('mouseenter', () => {
+      closeSub();
+      if (menuEl.style.display === 'none') return;
+      const r = speedItem.getBoundingClientRect();
+      sub = renderMenu(window.MSClipSpeed.menuItems(speedIds()), null, r.right - 2, r.top - 4);
+      sub.classList.add('ly-sub');
+      sub.addEventListener('click', () => { closeSub(); menuEl.style.display = 'none'; });
+    });
+    speedItem.addEventListener('click', () => { closeSub(); menuEl.style.display = 'none'; window.MSClipSpeed?.askCustom(speedIds()); });
+    // Os outros itens fecham o submenu ao passar o mouse
+    menuEl.addEventListener('mouseover', e => {
+      const row = e.target.closest('.ctx-item');
+      if (row && row !== item && row !== speedItem) closeSub();
+    });
+
     // Só para clips que não são áudio: acompanha a abertura do menu
     new MutationObserver(() => {
       if (menuEl.style.display === 'none') { closeSub(); return; }
       const clips = selectedClips();
       item.style.display = clips.some(c => st().templates.find(t => t.id === c.templateId)?.type !== 'audio') ? '' : 'none';
       camItem.style.display = clips.some(c => window.ClipKF?.isCamera(c)) ? '' : 'none';
+      speedItem.style.display = clips.some(c => window.MSClipSpeed?.kindOf(c)) ? '' : 'none';
     }).observe(menuEl, { attributes: true, attributeFilter: ['style'] });
   }
   // #endregion

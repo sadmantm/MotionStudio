@@ -43,7 +43,7 @@ const TARGETS = {
 
 // Arquivos do projeto que vão no app (o resto — models/, venv, config com a
 // chave da IA, tmp/, dist/ — fica de fora)
-const APP_ENTRIES = ['index.js', 'exporter.js', 'package.json', 'Interface', 'libs', 'templates', 'text-templates', 'fonts', 'assets', 'logo.png', 'logoplus.png', 'Icon.png'];
+const APP_ENTRIES = ['index.js', 'exporter.js', 'package.json', 'Interface', 'libs', 'templates', 'text-templates', 'catalog', 'fonts', 'assets', 'logo.png', 'logoplus.png', 'Icon.png'];
 const SKIP_NAMES  = new Set(['.DS_Store', 'Thumbs.db', '__pycache__']);
 
 const IS_MAC_HOST = process.platform === 'darwin';

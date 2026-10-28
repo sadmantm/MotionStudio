@@ -396,11 +396,17 @@ function _buildTranscribeModal() {
   document.getElementById('txHighlight').addEventListener('input', onStyle('highlightColor', v => v));
 }
 
-function openTranscribeModal(clipId) {
+/** clipIds: um id ou vários (seleção múltipla) — o primeiro dá o fundo da prévia */
+function openTranscribeModal(clipIds) {
   _buildTranscribeModal();
 
-  const modal = document.getElementById('transcribeModal');
-  modal._clipId = clipId;
+  const ids    = [].concat(clipIds).filter(Boolean);
+  const clipId = ids[0];
+  const modal  = document.getElementById('transcribeModal');
+  modal._clipId  = clipId;
+  modal._clipIds = ids;
+  modal.querySelector('.modal-header > span').textContent =
+    ids.length > 1 ? `Transcrição Automática · ${ids.length} clips` : 'Transcrição Automática';
 
   // Reset UI
   document.getElementById('txProgress').style.display = 'none';
@@ -541,11 +547,15 @@ window.__transcribeClip = function (clipId, opts) {
 // Transcrição
 async function startTranscription() {
 
-  const modal  = document.getElementById('transcribeModal');
-  const clipId = modal._clipId;
-  const clip   = window.__appState?.clips.find(c => c.id === clipId);
+  const modal = document.getElementById('transcribeModal');
+  const state = window.__appState;
+  // Seleção múltipla: transcreve na ordem da timeline
+  const clips = (modal._clipIds || [modal._clipId])
+    .map(id => state?.clips.find(c => c.id === id))
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start);
 
-  if (!clip) { window.MSUI.notify('Clip não encontrado.'); return; }
+  if (!clips.length) { window.MSUI.notify('Clip não encontrado.'); return; }
 
   const txTmplId   = document.getElementById('txTmplSelect').value;
   const language   = document.getElementById('txLangSelect').value || '';
@@ -567,51 +577,78 @@ async function startTranscription() {
   const task = window.MSUI.task({ title: 'Transcrevendo o áudio', detail: progressText.textContent, progress: 0.05, onOpen: () => { modal.style.display = 'flex'; } });
   const sync = () => task.update({ progress: (parseFloat(progressFill.style.width) || 0) / 100, detail: progressText.textContent });
 
-  try {
-    let tick = 0;
-    const result = await transcribeClipMedia(clip, {
-      language,
-      onProgress: ({ stage, status }) => {
-        if (stage === 'model') {
-          progressText.textContent = status.message || 'Carregando modelo Whisper…';
-          // Download do modelo ocupa 5–20% da barra; senão avança devagar
-          progressFill.style.width = status.progress
-            ? `${5 + status.progress.percent * 0.15}%`
-            : `${Math.min(5 + ++tick * 0.5, 20)}%`;
-        } else if (stage === 'read') {
-          progressText.textContent = 'Lendo arquivo…';
-          progressFill.style.width = '22%';
-        } else {
-          progressText.textContent = status.device === 'cuda'
-            ? 'Transcrevendo (GPU)…'
-            : 'Transcrevendo em CPU — pode levar alguns minutos…';
-          progressFill.style.width = '35%';
-        }
-        sync();
-      },
-    });
+  // Etapa de um clip (local 0–1) → barra do lote inteiro
+  let index = 0;
+  const setProgress = (local, text) => {
+    progressText.textContent = clips.length > 1 ? `Clip ${index + 1}/${clips.length} · ${text}` : text;
+    progressFill.style.width = `${((index + local) / clips.length) * 100}%`;
+    sync();
+  };
 
-    const captions = result.captions?.length ? result.captions : (result.segments || []);
-    if (!captions.length) {
-      throw new Error('Nenhuma fala detectada nesse trecho do vídeo.');
+  // Todas as legendas do lote: um grupo (editor em lote) e um passo de undo
+  const captionGroupId = 'cap_' + mkId();
+  const shown  = [];
+  const failed = [];
+  let created  = 0;
+  let last     = null;
+
+  try {
+    for (; index < clips.length; index++) {
+      const clip = clips[index];
+      try {
+        let tick = 0;
+        const result = await transcribeClipMedia(clip, {
+          language,
+          onProgress: ({ stage, status }) => {
+            if (stage === 'model') {
+              // Download do modelo ocupa 5–20% da barra; senão avança devagar
+              setProgress(status.progress
+                ? 0.05 + status.progress.percent * 0.0015
+                : Math.min(0.05 + ++tick * 0.005, 0.2), status.message || 'Carregando modelo Whisper…');
+            } else if (stage === 'read') {
+              setProgress(0.22, 'Lendo arquivo…');
+            } else {
+              setProgress(0.35, status.device === 'cuda'
+                ? 'Transcrevendo (GPU)…'
+                : 'Transcrevendo em CPU — pode levar alguns minutos…');
+            }
+          },
+        });
+
+        const captions = result.captions?.length ? result.captions : (result.segments || []);
+        if (!captions.length) throw new Error('Nenhuma fala detectada nesse trecho.');
+
+        setProgress(0.9, 'Criando clips na timeline…');
+
+        const n = _createTextClipsFromSegments(captions, clip, txTmplId, trackIndex, _txActiveOverrides(),
+          { captionGroupId, undo: created === 0 });
+        if (!n) throw new Error('As falas detectadas ficaram fora do trecho usado do clip.');
+        created += n;
+        last = result;
+        // Na lista do lote, tempos da timeline (cada clip começa num ponto)
+        captions.forEach(seg => shown.push(clips.length > 1 ? { ...seg, start: clip.start + seg.start } : seg));
+      } catch (err) {
+        // Um clip sem fala não derruba o lote; erro de servidor sim, se for o único
+        console.error('[Transcribe] Erro:', clip.label, err);
+        failed.push(`${clip.label || clip.id}: ${err.message}`);
+      }
     }
 
-    progressFill.style.width = '90%';
-    progressText.textContent = 'Criando clips na timeline…';
+    if (!created) throw new Error(failed.join('\n') || 'Nada transcrito.');
 
-    const created = _createTextClipsFromSegments(captions, clip, txTmplId, trackIndex, _txActiveOverrides());
-    if (!created) throw new Error('As falas detectadas ficaram fora do trecho usado do clip.');
-
+    index = clips.length;
     progressFill.style.width = '100%';
-    _showTranscribeResult(result);
+    _showTranscribeResult(clips.length > 1
+      ? { ...last, captions: shown, probability: null, duration: clips.reduce((sum, c) => sum + c.duration, 0) }
+      : last);
     btnStart.disabled = false;
-    task.done(`${created} legenda(s) criadas`);
+    task.done(`${created} legenda(s) criadas` + (failed.length ? ` · ${failed.length} clip(s) sem legenda` : ''));
+    if (failed.length) window.MSUI.notify(`Alguns clips não foram legendados:\n${failed.join('\n')}`);
 
   } catch (err) {
     progress.style.display = 'none';
     btnStart.disabled      = false;
     task.fail(err.message || 'Falhou');
-    console.error('[Transcribe] Erro:', err);
     _refreshWhisperStatus();
     window.MSUI.notify(`Erro na transcrição:\n${err.message}`);
   }
@@ -619,7 +656,8 @@ async function startTranscription() {
 
 // Cria clips de texto na timeline
 /** overrides: { fontSize?, color?, highlightColor? } escolhidos no modal */
-function _createTextClipsFromSegments(segments, sourceClip, txTmplId, trackIndex, overrides = {}) {
+/** batch: { captionGroupId?, undo? } — lote de vários clips num grupo e num passo de undo */
+function _createTextClipsFromSegments(segments, sourceClip, txTmplId, trackIndex, overrides = {}, batch = {}) {
   const state  = window.__appState;
   const res    = state.project.res;
   const txTmpl = window.__TextRegistry?.getById(txTmplId);
@@ -632,14 +670,14 @@ function _createTextClipsFromSegments(segments, sourceClip, txTmplId, trackIndex
   if (!valid.length) return 0;
 
   // Um passo de undo para a transcrição inteira
-  window.__tlPushUndo?.();
+  if (batch.undo !== false) window.__tlPushUndo?.();
 
   // Se a track escolhida já tem clips nesse intervalo, sobe para a primeira livre
   const rangeStart = sourceClip.start + valid[0].start;
   const rangeEnd   = Math.min(clipEnd, sourceClip.start + valid[valid.length - 1].start + valid[valid.length - 1].duration);
   trackIndex = window.__findFreeTrack?.(rangeStart, rangeEnd, trackIndex) ?? trackIndex;
 
-  const captionGroupId = 'cap_' + mkId();
+  const captionGroupId = batch.captionGroupId || 'cap_' + mkId();
   let created = 0;
 
   segments.forEach((seg, i) => {

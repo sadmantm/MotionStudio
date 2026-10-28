@@ -602,6 +602,7 @@
   <script src="preview-window.js"></script>
   <script src="audio-meter.js"></script>
   <script src="audio-tools.js"></script>
+  <script src="clip-speed.js"></script>
   <script src="audio-autocut.js"></script>
   <script src="custom-assets.js"></script>
   <script src="blocks-panel.js"></script>
@@ -689,8 +690,11 @@
     if (!track || !thumb) return;
     let dragging = false;
 
+    const range = () => window.__TL_ZOOM || { min: 0.01, max: 60 };
+
     function setThumbFromZoom(z) {
-      const pct = (Math.log(z) - Math.log(0.1)) / (Math.log(16) - Math.log(0.1));
+      const { min, max } = range();
+      const pct = (Math.log(z) - Math.log(min)) / (Math.log(max) - Math.log(min));
       thumb.style.left = Math.max(0, Math.min(100, pct * 100)) + '%';
     }
 
@@ -705,7 +709,8 @@
     function updateFromEvent(e) {
       const rect = track.getBoundingClientRect();
       const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      const z    = Math.exp(Math.log(0.1) + pct * (Math.log(16) - Math.log(0.1)));
+      const { min, max } = range();
+      const z    = Math.exp(Math.log(min) + pct * (Math.log(max) - Math.log(min)));
       if (window.__appState?.project) window.__setTimelineZoom?.(z);
       thumb.style.left = (pct * 100) + '%';
     }

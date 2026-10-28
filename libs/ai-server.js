@@ -475,6 +475,22 @@ const MOTION_KIT_DOCS = [
   '- Texto: MS.fitText(texto, { width, fontFamily, fontWeight }) → font-size que cabe numa linha; MS.fitElement(el); MS.split(el, "chars" | "words" | "lines") → <span>s para animar (chame em ready, depois das fontes).',
   '- SVG: MS.path.draw(elementoPath, p) desenha o traço até a fração p; MS.path.point(d, p) → { x, y, angle }; MS.path.morph(p, dA, dB) → d intermediário entre duas formas quaisquer; MS.shape.circle(r), rect(w, h, raio), polygon(n, r), star(pontas, ext, int) → d centrado em (0, 0).',
   '- Som do projeto: MS.audio(t) → { level, bass, mid, treble, bands[16], beat, pulse } (0–1, já suavizado; pulse decai depois de cada batida) e MS.audio.bars(t, n) → n barras. Use quando o pedido falar em música, batida, ritmo, visualizador ou "reagir ao som". Sem áudio no projeto tudo vem 0: o clipe precisa continuar bonito assim.',
+  '- SÓ existe o que está listado acima: nenhuma outra função MS.* (MS.tween, MS.lerpColor, MS.map… são undefined e quebram o seek em todo quadro). MS.ease é um OBJETO de funções (MS.ease.outCubic(u)), nunca MS.ease("…"); MS.interpolate exige input e output do mesmo tamanho; MS.random, MS.rng, MS.noise2D e MS.noise3D levam a semente como 1º argumento. Precisa de outro helper? Escreva-o no próprio clipe.',
+].join('\n');
+
+/**
+ * Defeitos recorrentes dos clipes gerados (sobreposição, texto estourando,
+ * estado que não volta no tempo, 3D fora de escala, loop com pulo). Cada
+ * regra diz o que fazer, não só o que evitar.
+ */
+const BUILD_RULES = [
+  'CONSTRUÇÃO À PROVA DE ERRO (obrigatório — são os defeitos mais comuns):',
+  '- Layout por zonas: divida o quadro em faixas com coordenadas explícitas (ex.: título 180–520 px, conteúdo 600–1500 px, rodapé 1560–1760 px) e coloque cada bloco na sua faixa com position:absolute + top/left/width/height. NUNCA use um contêiner flex/grid da altura do quadro com justify-content: space-between/space-around/space-evenly: ele espalha o conteúdo pela altura inteira e cai em cima dos elementos absolutos. Dentro de uma faixa, flex/grid com gap fixo é ok. Antes de responder, some as alturas e confira que nenhuma caixa invade a faixa de outra.',
+  '- Texto cabe na caixa: toda caixa de texto tem width ou max-width explícito dentro da margem de segurança (≥ 7% da largura em cada lado). Títulos de uma linha usam MS.fitText/MS.fitElement em ready (depois de document.fonts.ready); textos longos quebram linha (white-space:nowrap só com tamanho medido); palavras longas e códigos (NOMES_EM_CAIXA_ALTA, URLs) recebem overflow-wrap:anywhere ou fonte menor. Contadores: font-variant-numeric: tabular-nums e largura reservada para o valor final.',
+  '- Estado reversível: seek(t) é chamado fora de ordem (voltar no tempo, export em paralelo, miniaturas). TODO estado — inclusive textContent, classes, display, etapa ativa — é recalculado de t em cada chamada: el.textContent = t < T.troca ? "A" : "B"; el.classList.toggle("ativo", t >= T.x). Proibido mudar estado em onStart/onUpdate/onComplete/tl.call ou guardar "já aconteceu" numa variável.',
+  '- IDs únicos: cada id aparece uma única vez no documento; elementos repetidos usam classe. Nenhum texto, rótulo ou elemento de outra cena/versão pode sobrar.',
+  '- 3D com noção de espaço: dimensione pelo tamanho na tela. Com câmera perspectiva, a altura visível à distância d é 2·d·tan(fov/2) unidades → pxPorUnidade = H / (2·d·tan(fov/2)). Calcule a escala assim e confira: nenhum objeto passa de ~80% da largura; partículas ficam numa região definida (não no quadro todo); anéis e paredes cabem no quadro. O 3D que é assunto da cena fica numa faixa livre: nenhum card opaco ou com backdrop-filter por cima dele.',
+  '- Loops sem pulo: rolagem contínua (código, lista, ticker) usa o conteúdo DUPLICADO e deslocamento = (t × velocidade) % altura de UMA cópia, medida em ready (offsetHeight incluindo o gap entre as cópias); assim o fim encaixa no começo. Rotações em loop fecham em 360°.',
 ].join('\n');
 
 /** spec vazia: o HTML de referência no pedido já demonstra o contrato (cenas encadeadas) */
@@ -502,6 +518,8 @@ function buildSystemInstruction({ spec, w, h, fps, mode = 'create', libs = [], s
     MOTION_PRINCIPLES,
     '',
     MOTION_KIT_DOCS,
+    '',
+    BUILD_RULES,
     '',
     mode === 'edit'
       ? PATCH_FORMAT
@@ -540,9 +558,13 @@ function sfxRules(mode, catalog = '') {
     'um array de { t, type | sound, gain?, pitch?, dur?, pan? } com t em segundos do clipe (mesmo relógio de seek).',
     sfxVocabulary(catalog),
     'O editor sintetiza os sons e cria a faixa de áudio sozinho: NÃO use <audio>, WebAudio, Tone.js nem arquivos de som.',
-    'Um som por acontecimento visual relevante (entradas, revelações, números, transições, CTA), sem poluir: tipicamente 3 a 10 por clipe.',
-    'Alinhe t ao instante exato do movimento (início de uma entrada = whoosh/swipe/pop; revelação = impact; riser começa antes e termina no impacto).',
-    'Exemplo: window.Motion = { config: CONFIG, sfx: [{ t: 0.15, type: "whoosh" }, { t: 0.9, sound: "glass/notification", gain: 0.6 }, { t: 2.0, type: "riser", dur: 1.2 }, { t: 3.2, type: "impact" }], seek, renderFrame, whenReady };',
+    '- Tempos amarrados à animação: declare os momentos-chave UMA vez (const T = { titulo: 0.4, card: 1.2, revela: 3.2 }) e use as MESMAS constantes na animação e no sfx (t: T.revela). Nunca escreva segundos soltos no sfx: ajustar a animação tem que levar o som junto.',
+    '- Só soa o que se vê: cada som corresponde a um acontecimento visível naquele instante (typing só com texto sendo digitado na tela; scan só com uma varredura visível; erro/denied só com um erro mostrado). Sem evento na tela, sem som.',
+    '- A duração conta: riser sintetizado (type) começa em T.x − dur e termina EXATAMENTE no impacto ({ t: T.revela - 1.2, type: "riser", dur: 1.2 }); nada corta um riser antes do fim. Sons de biblioteca (sound) já são alinhados pelo pico: o t deles é o instante do impacto. typing: dur = tempo de digitação visível.',
+    '- Um som forte por batida: dois sons fortes (impact, bass, slam, switch pesado, erro/denied) a menos de ~250 ms se embolam — escolha o que descreve o momento, ou ponha os dois no MESMO t como uma camada só. Deixe ar entre acontecimentos.',
+    '- Escolha pelo que o momento pede (peso, material, velocidade, emoção), lendo a descrição do catálogo, não pelo nome do arquivo. Não repita a fórmula whoosh → riser → impact → success → shimmer: riser só quando uma revelação é construída, success só numa conquista real; varie entre as cenas do vídeo.',
+    '- Densidade: 3 a 8 sons por clipe, só nos acontecimentos relevantes (entradas, revelações, números, transições, CTA).',
+    'Exemplo: const T = { entra: 0.15, aviso: 0.9, revela: 3.2 }; … window.Motion = { config: CONFIG, sfx: [{ t: T.entra, type: "whoosh" }, { t: T.aviso, sound: "glass/notification", gain: 0.6 }, { t: T.revela - 1.2, type: "riser", dur: 1.2 }, { t: T.revela, type: "impact" }], seek, renderFrame, whenReady };',
     mode === 'edit' ? 'Na edição: mantenha Motion.sfx coerente com as mudanças (crie se não existir, ajuste os tempos se a animação mudar).' : '',
   ].filter(Boolean).join('\n');
 }
@@ -1200,6 +1222,9 @@ const SFX_SYSTEM = [
   '- Leia o código HTML para achar os instantes exatos: delays/durações de timelines (GSAP, keyframes, seek(t)), entradas de títulos, revelações, números, trocas de cena, CTA.',
   '- Um som por acontecimento visual relevante; nada de trilha contínua nem sons a cada frame. Tipicamente 3 a 10 por clipe; deixe respiro.',
   '- Entrada de elemento = whoosh/swipe/pop; revelação ou logo = impact (riser antes, terminando no impacto); preço/dinheiro = coin ou commerce/*; mensagem = notification; digitação = typing com dur.',
+  '- Só soa o que se vê: nada de som para um evento que não aparece na tela naquele instante (typing sem texto sendo digitado, scan sem varredura, erro sem erro mostrado).',
+  '- A duração conta: riser sintetizado (type) começa em impacto − dur e termina exatamente no impacto; sons de biblioteca (sound) são alinhados pelo pico, então o t deles é o próprio instante do impacto. Dois sons fortes (impact, bass, slam, erro) a menos de ~250 ms se embolam: escolha um ou ponha os dois no mesmo t.',
+  '- Escolha pelo que o momento pede (peso, material, velocidade), pela descrição do catálogo e não pelo nome do arquivo; não use a mesma fórmula (whoosh → riser → impact → success → shimmer) em todo clipe.',
   '- Com narração ou legendas no mesmo trecho, mantenha gain ≤ 0.45 e evite sons longos por cima das falas.',
   '- Qualidade: prefira a biblioteca "sfxkit" (sons com ponto de sincronia e níveis calibrados) para movimento, impacto, interface, dados e notificações; escolha a intensidade pelo tom do vídeo (soft/subtle com narração ou corporativo, hard em edição enérgica) e a duração pelo movimento (fast/medium/slow).',
   '- Diversidade: não repita o mesmo som em sequência; alterne variações (ex.: pop-small-in, pop-medium-in) e varie gain/pitch levemente (0.9–1.1) nos repetidos.',
@@ -1721,7 +1746,7 @@ const SCENE_CRAFT = [
 const ANCHOR_RULES = [
   'CENA-ÂNCORA: as próximas cenas do vídeo serão criadas EDITANDO este HTML. Capriche nos detalhes e organize o código para ser reaproveitado:',
   '- <head> com o link das fontes e o :root; CSS base de componentes reutilizáveis (títulos, destaques, cards, grafismos recorrentes) separado do CSS específico desta cena.',
-  '- Helpers (easing, interpolação, PRNG) e o contrato window.Motion separados do conteúdo; o DOM desta cena num bloco próprio e a timeline desta cena numa função própria chamada por seek(t).',
+  '- Helpers (easing, interpolação, PRNG) e o contrato window.Motion separados do conteúdo; o DOM desta cena num bloco próprio e a timeline desta cena numa função própria chamada por seek(t), com os momentos-chave num objeto T usado pela animação e pelo Motion.sfx.',
 ].join('\n');
 
 /**
@@ -1744,7 +1769,7 @@ function buildSceneContinuePrompt({ scene, previousHtml, prompt, fps, sfx = fals
     `===== CENA ${scene.index + 1} DE ${scene.total}: "${scene.title}" =====`,
     'Crie esta cena EDITANDO o HTML de referência com blocos SEARCH/REPLACE (formato nas instruções):',
     '- Mantenha IDÊNTICOS o <head> (link das fontes e :root com as variáveis --ms-*), o CSS base, os helpers e o contrato window.Motion: são a identidade do vídeo.',
-    '- Troque o que é da cena: o DOM, o CSS específico e a timeline em seek(t). Reescreva esses blocos POR COMPLETO (um REPLACE grande é esperado aqui) — editar pouco e deixar a cena mais pobre que a referência é um erro. A composição é NOVA (não repita o layout da referência); paleta, fontes, grafismos e linguagem de movimento continuam os mesmos, e o nível de detalhe é pelo menos o da referência.',
+    '- Troque o que é da cena: o DOM, o CSS específico e a timeline em seek(t). Reescreva esses blocos POR COMPLETO (um REPLACE grande é esperado aqui) — editar pouco e deixar a cena mais pobre que a referência é um erro. Nenhum elemento, id, texto ou rótulo da referência pode sobrar (nem duplicado ao lado do novo): o que é da cena anterior sai inteiro. A composição é NOVA (não repita o layout da referência); paleta, fontes, grafismos e linguagem de movimento continuam os mesmos, e o nível de detalhe é pelo menos o da referência.',
     `- Continuidade: esta cena começa onde a referência termina (t = ${fmtSec(prev.duration)} s nela). Veja o que sai, o que fica na tela e como está o fundo, e faça o quadro t = 0 desta cena partir desse estado — o corte entre os clipes deve parecer uma transição única, sem salto de fundo nem de elementos.`,
     `- Duração EXATA: ${D} s → no config, durationInSeconds: ${D} e totalFrames: ${Math.round(D * fps)} (fps ${fps}).`,
     `- Troque o <title> por <title>${scene.title}</title>.`,
@@ -1760,7 +1785,7 @@ function buildSceneContinuePrompt({ scene, previousHtml, prompt, fps, sfx = fals
       : 'É o encerramento do vídeo: feche com um final claro.',
     'Não escreva a fala inteira na tela (legendas são feitas à parte): destaque só palavras-chave, números e ideias.',
     SCENE_CRAFT,
-    sfx ? `${sfxRules('edit', sfxCatalog)}\nReescreva Motion.sfx para ESTA cena (os sons da referência não valem aqui).` : '',
+    sfx ? `${sfxRules('edit', sfxCatalog)}\nReescreva Motion.sfx para ESTA cena (os sons da referência não valem aqui) com as constantes de tempo DESTA timeline, e não repita a sequência de sons da referência.` : '',
     prompt ? `Pedido adicional: ${prompt}` : '',
   ].filter(Boolean).join('\n');
 }

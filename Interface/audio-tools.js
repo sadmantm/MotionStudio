@@ -148,7 +148,32 @@
     });
   }
 
-  async function applyFx(clipIds, rawFx) {
+  /**
+   * Edição em grupo: muda só `path` ('pitch', 'lowcut', 'denoise.on'…) e
+   * mantém os outros ajustes de cada clip. Clips com o mesmo arquivo e o
+   * mesmo resultado vão juntos ao servidor; um passo de undo para tudo.
+   */
+  async function applyField(clipIds, path, value) {
+    const groups = new Map();
+    clipIds.map(id => st().clips.find(c => c.id === id))
+      .filter(c => originOf(tmplOf(c))?.type === 'audio')
+      .forEach(c => {
+        const cur = fxOf(c);
+        const fx = normalizeFx(path.startsWith('denoise.')
+          ? { ...cur, denoise: { ...cur.denoise, [path.slice(8)]: value } }
+          : { ...cur, [path]: value });
+        const key = `${originOf(tmplOf(c)).id}|${fxSig(fx)}`;
+        if (!groups.has(key)) groups.set(key, { fx, ids: [] });
+        groups.get(key).ids.push(c.id);
+      });
+    let first = true;
+    for (const g of groups.values()) {
+      await applyFx(g.ids, g.fx, { undo: first });
+      first = false;
+    }
+  }
+
+  async function applyFx(clipIds, rawFx, { undo = true } = {}) {
     const fx = normalizeFx(rawFx);
     const seq = ++applySeq;
     const targets = clipIds.map(id => st().clips.find(c => c.id === id)).filter(Boolean);
@@ -167,7 +192,7 @@
 
       const live = targets.filter(c => st().clips.includes(c));
       if (!live.length) return;
-      window.__tlPushUndo?.();
+      if (undo) window.__tlPushUndo?.();
       rescale(live, fx, template);
       live.forEach(c => {
         c.templateId = template.id;
@@ -334,7 +359,7 @@
   // #endregion
 
   window.__renderAudioToolsProps = renderProps;
-  window.MSAudioTools = { applyFx, normalizeFx, isNeutral, fxOf, originOf, siblingsOf };
+  window.MSAudioTools = { applyFx, applyField, normalizeFx, isNeutral, fxOf, originOf, siblingsOf };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPanel);
   else initPanel();

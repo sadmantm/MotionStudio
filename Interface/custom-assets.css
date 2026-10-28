@@ -56,6 +56,20 @@
 .cx-card:hover .cx-del, .text-preview-card:hover .cx-del { opacity: 1; }
 .cx-del:hover { background: var(--danger); }
 .text-preview-card { position: relative; }
+.cx-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 3;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #000;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  pointer-events: none;
+}
 /* #endregion */
 
 /* #region Modal */

@@ -2235,7 +2235,8 @@ function selectedTrackClipAt(time = state.time) {
 
 // #region Timeline — Renderização
 function tlWidth() {
-  const total = state.project?.totalDuration || 10;
+  // __tlMinEnd: gravação de voz em andamento pode passar do fim do projeto
+  const total = Math.max(state.project?.totalDuration || 10, Number(window.__tlMinEnd) || 0);
   return Math.max(800, total * PX_PER_SEC * state.zoom + 200);
 }
 
@@ -2464,7 +2465,8 @@ function visibleTimeWindow(pxPerSec) {
   ];
 }
 
-const RULER_STEPS = [1 / 120, 1 / 60, 1 / 30, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+const RULER_STEPS = [1 / 120, 1 / 60, 1 / 30, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+const RULER_LAST  = RULER_STEPS[RULER_STEPS.length - 1];
 
 /** Rótulo curto da régua (0:05 · 1:20 · 1:02:03); passos abaixo de 1 s mostram centésimos */
 function fmtRulerLabel(t, step) {
@@ -2483,10 +2485,10 @@ function renderRuler(W, pxPerSec, fps, t0, t1) {
 
   const frame   = 1 / fps;
   const steps   = [frame, ...RULER_STEPS.filter(s => s > frame)];
-  const subStep = steps.find(s => s * pxPerSec >= 8) || 600;
+  const subStep = steps.find(s => s * pxPerSec >= 8) || RULER_LAST;
   // Rótulo só em múltiplos inteiros do passo menor (0,25 s ÷ 1/30 s = 7,5 dava 0:18.67…)
   const isMultiple = s => Math.abs(s / subStep - Math.round(s / subStep)) < 1e-6;
-  const major   = steps.find(s => s * pxPerSec >= 70 && s >= subStep && isMultiple(s)) || 600;
+  const major   = steps.find(s => s * pxPerSec >= 70 && s >= subStep && isMultiple(s)) || RULER_LAST;
   const ratio   = Math.max(1, Math.round(major / subStep));
   const end     = Math.min(t1, W / pxPerSec);
 
@@ -2685,7 +2687,7 @@ function setTimelineZoom(nextZoom, anchor = 'center') {
     timeAnchor = (timelineScroll.scrollLeft + mouseX) / oldPxPerSec;
   }
 
-  state.zoom = clamp(nextZoom, 0.1, 16);
+  state.zoom = clamp(nextZoom, TL_ZOOM_MIN, TL_ZOOM_MAX);
 
   if (zoomLabel) {
     zoomLabel.textContent = Math.round(state.zoom * 100) + '%';
@@ -2703,11 +2705,11 @@ function setTimelineZoom(nextZoom, anchor = 'center') {
 }
 
 $('btnZoomIn')?.addEventListener('click', () => {
-  setTimelineZoom((state.zoom || 1) * 1.5);
+  setTimelineZoom((state.zoom || 1) * 2);
 });
 
 $('btnZoomOut')?.addEventListener('click', () => {
-  setTimelineZoom((state.zoom || 1) / 1.5);
+  setTimelineZoom((state.zoom || 1) / 2);
 });
 
 /** Ajusta o zoom para o projeto inteiro caber na largura visível */
@@ -3499,22 +3501,36 @@ function startClipDrag(
     let speed = 0;
     if (lastEvent.clientX < rect.left + EDGE) speed = -Math.min(MAX_STEP, Math.ceil((rect.left + EDGE - lastEvent.clientX) / 2));
     if (lastEvent.clientX > rect.right - EDGE) speed = Math.min(MAX_STEP, Math.ceil((lastEvent.clientX - rect.right + EDGE) / 2));
-    if (!speed) { autoScrollRaf = null; return; }
+    // Vertical só encostado na borda: rolar em direção à track sob o cursor
+    // mudava a track sob ele e o clip oscilava entre a primeira e a última
+    const EDGE_Y = 20;
+    let speedY = 0;
+    if (tlScroll.scrollHeight > tlScroll.clientHeight) {
+      if (lastEvent.clientY < rect.top + EDGE_Y) speedY = -Math.min(MAX_STEP / 2, Math.ceil((rect.top + EDGE_Y - lastEvent.clientY) / 3));
+      if (lastEvent.clientY > rect.bottom - EDGE_Y) speedY = Math.min(MAX_STEP / 2, Math.ceil((lastEvent.clientY - rect.bottom + EDGE_Y) / 3));
+    }
+    if (!speed && !speedY) { autoScrollRaf = null; return; }
     const before = tlScroll.scrollLeft;
+    const beforeTop = tlScroll.scrollTop;
     tlScroll.scrollLeft = Math.max(0, before + speed);
-    if (tlScroll.scrollLeft !== before) {
-      updateTimelineWidth();
+    tlScroll.scrollTop = Math.max(0, beforeTop + speedY);
+    if (tlScroll.scrollLeft !== before || tlScroll.scrollTop !== beforeTop) {
+      if (tlScroll.scrollLeft !== before) updateTimelineWidth();
       onMove(lastEvent);
     }
     autoScrollRaf = requestAnimationFrame(autoScroll);
   }
 
+  /**
+   * Track sob o cursor, medida nas rows renderizadas: a conta índice ×
+   * altura divergia da tela (min-height do CSS, zoom vertical) e o clip
+   * caía na track errada. Histerese: a track atual só é trocada quando o
+   * cursor entra de fato na vizinha, então passar perto da borda entre
+   * duas layers não faz o clip saltar.
+   */
   function resolveTargetTrack(
     clientY
   ) {
-    const rowHeight =
-      trackRowHeight();
-
     const tracksRect =
       tlTracks.getBoundingClientRect();
 
@@ -3524,16 +3540,29 @@ function startClipDrag(
     const trackIndexes =
       getTrackIndexes();
 
-    const rows =
-      trackIndexes.map(
-        (trackIndex, index) => ({
-          trackIndex,
-          top: index * rowHeight,
-          bottom:
-            (index + 1) *
-            rowHeight,
-        })
-      );
+    const rows = [...tlTracks.querySelectorAll(':scope > .tl-row')].map(row => {
+      const r = row.getBoundingClientRect();
+      return {
+        trackIndex: Number(row.dataset.track),
+        top: r.top - tracksRect.top,
+        bottom: r.bottom - tracksRect.top,
+      };
+    });
+
+    const current = lastTrackResolution ??
+      { type: 'existing', trackIndex: origStates.get(clipId)?.trackIndex };
+    const currentRow = current.type === 'existing' &&
+      rows.find(row => row.trackIndex === current.trackIndex);
+    if (currentRow) {
+      const margin = Math.min(14, (currentRow.bottom - currentRow.top) * 0.35);
+      // Na 1ª/última row a margem não avança sobre a zona de track nova
+      const top = currentRow === rows[0] ? currentRow.top : currentRow.top - margin;
+      const bottom = currentRow === rows[rows.length - 1] ? currentRow.bottom : currentRow.bottom + margin;
+      if (relativeY >= top && relativeY < bottom) {
+        hideNewTrackHint();
+        return current;
+      }
+    }
 
     const hit = rows.find(
       row =>
@@ -3552,7 +3581,7 @@ function startClipDrag(
     }
 
     const totalHeight =
-      rows.length * rowHeight;
+      rows.length ? rows[rows.length - 1].bottom : 0;
 
     const maxTrackIndex =
       trackIndexes.length
@@ -3795,10 +3824,6 @@ function startClipDrag(
       resolution
     );
 
-    scrollToTrack(
-      resolution.trackIndex
-    );
-
     const primary =
       state.clips.find(
         clip => clip.id === clipId
@@ -3969,41 +3994,61 @@ function startClipDrag(
   );
 }
 
-// ── Auto-scroll vertical em direção à track de destino ───────────────────
-function scrollToTrack(trackIndex) {
-  const tlScroll = document.getElementById('tlScroll');
-  if (!tlScroll) return;
-
-  const trackIndexes = getTrackIndexes();
-  const rowH  = trackRowHeight();
-  const rowPos = trackIndexes.indexOf(trackIndex);
-  if (rowPos === -1) return;
-
-  // Centro da row de destino
-  const rowCenterY = rowPos * rowH + rowH / 2;
-
-  // Centro visível atual do scroll
-  const visibleCenter = tlScroll.scrollTop + tlScroll.clientHeight / 2;
-
-  // Só scrolla se a row estiver fora da metade visível (evita jitter)
-  const deadzone = tlScroll.clientHeight * 0.25;
-  if (Math.abs(rowCenterY - visibleCenter) < deadzone) return;
-
-  const targetScrollTop = rowCenterY - tlScroll.clientHeight / 2;
-
-  tlScroll.scrollTo({
-    top:      Math.max(0, targetScrollTop),
-    behavior: 'smooth',
-  });
-}
-
 (function syncLabelsScroll() {
   const tlScroll = document.getElementById('tlScroll');
   const tlLabels = document.getElementById('tlLabels');
   if (!tlScroll || !tlLabels) return;
 
+  // A régua é sticky; a cabeça da agulha desce junto para ficar sobre ela
+  const head = document.querySelector('#tlPlayhead .ph-head');
   tlScroll.addEventListener('scroll', () => {
     tlLabels.scrollTop = tlScroll.scrollTop;
+    if (head) head.style.top = tlScroll.scrollTop + 'px';
+  }, { passive: true });
+})();
+
+/**
+ * Largura da coluna das tracks: alça entre os nomes e a timeline.
+ * Fica no estilo inline de #tlLabels (renderTimeline só troca o conteúdo).
+ */
+(function initLabelsResize() {
+  const KEY = 'ms.tlLabelsWidth';
+  const MIN = 90, MAX = 420;
+  const labels = document.getElementById('tlLabels');
+  if (!labels) return;
+  const apply = w => { labels.style.width = `${Math.round(Math.min(MAX, Math.max(MIN, w)))}px`; };
+  try {
+    const saved = Number(localStorage.getItem(KEY));
+    if (saved) apply(saved);
+  } catch (_) { /* sem storage */ }
+
+  const handle = document.createElement('div');
+  handle.id = 'tlLabelsResize';
+  handle.title = 'Arraste para ajustar a largura dos nomes das tracks (duplo clique: padrão)';
+  labels.after(handle);
+
+  handle.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = labels.getBoundingClientRect().width;
+    handle.classList.add('is-dragging');
+    document.body.classList.add('is-resizing-labels');
+    const onMove = ev => apply(startW + ev.clientX - startX);
+    const onUp = () => {
+      handle.classList.remove('is-dragging');
+      document.body.classList.remove('is-resizing-labels');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      try { localStorage.setItem(KEY, String(labels.getBoundingClientRect().width)); } catch (_) { /* sem storage */ }
+      window.__scheduleRenderTimeline?.();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  handle.addEventListener('dblclick', () => {
+    labels.style.width = '';
+    try { localStorage.removeItem(KEY); } catch (_) { /* sem storage */ }
   });
 })();
 
@@ -5151,8 +5196,18 @@ function initContextMenu() {
 
         if (!clipId) return;
 
+        // Clip dentro de uma seleção múltipla: transcreve todos os de áudio/vídeo dela
+        const selected = getSelectedIds();
+        const ids = selected.has(clipId)
+          ? [clipId, ...[...selected].filter(id => id !== clipId)].filter(id => {
+              const clip = state.clips.find(c => c.id === id);
+              const type = clip && state.templates.find(t => t.id === clip.templateId)?.type;
+              return type === 'video' || type === 'audio';
+            })
+          : [clipId];
+
         window.__onClipTranscribe?.(
-          clipId
+          ids
         );
       },
       eventOptions

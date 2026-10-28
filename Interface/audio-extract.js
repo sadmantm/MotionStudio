@@ -187,6 +187,10 @@
     if (!quiet) status('Lendo os efeitos sonoros do clipe…');
     const cues = await window.MotionSFX.readCues(tmpl.html);
     if (!appState().clips.includes(clip)) return 0;
+    if (cues.error) {
+      if (!quiet) status(`O script do clipe quebra ao animar (${cues.error}) — corrija o clipe antes dos sons`);
+      return 0;
+    }
     const placed = cues.map(c => ({ ...c, t: cueOffset(clip, tmpl, c.t) }));
     const n = await renderSfxTrack(clip, placed, { pushUndo: !quiet });
     if (!n) {

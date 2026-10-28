@@ -17,6 +17,37 @@
 
   const SEVERITY = { error: 0, warning: 1, info: 2 };
 
+  /** Chaves de window.MS (libs/motion-kit.js) — o resto é undefined e quebra o seek */
+  const MS_API = new Set([
+    'kit', 'clamp', 'lerp', 'seg', 'ease', 'bezier', 'interpolate', 'interpolateColors', 'mixColor', 'parseColor',
+    'spring', 'random', 'rng', 'noise2D', 'noise3D', 'wiggle',
+    'stagger', 'loop', 'pingpong', 'countUp',
+    'measureText', 'fitText', 'fitElement', 'split',
+    'path', 'shape', 'audio', 'motion', 'adapt', 'realRequestAnimationFrame',
+  ]);
+
+  /** Troca o conteúdo de <script>/<style> por espaços (mantém os índices para lineAt) */
+  function blankBlocks(src, tags) {
+    return src.replace(new RegExp(`(<(${tags})\\b[^>]*>)([\\s\\S]*?)(</\\2>)`, 'gi'),
+      (all, open, _tag, body, close) => open + body.replace(/[^\n]/g, ' ') + close);
+  }
+
+  /** Corpos de regras CSS (<style>) e atributos style="" */
+  function cssBlocks(src) {
+    const out = [];
+    const styleRe = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
+    let m;
+    while ((m = styleRe.exec(src))) {
+      const base = m.index + m[0].indexOf('>') + 1;
+      const ruleRe = /\{([^{}]*)\}/g;
+      let r;
+      while ((r = ruleRe.exec(m[1]))) out.push({ body: r[1], index: base + r.index });
+    }
+    const attrRe = /\sstyle\s*=\s*(["'])([\s\S]*?)\1/gi;
+    while ((m = attrRe.exec(src))) out.push({ body: m[2], index: m.index });
+    return out;
+  }
+
   function lineAt(src, index) {
     if (!(index >= 0)) return null;
     let n = 1;
@@ -124,6 +155,52 @@
     }
     if ((i = at(/<video[\s>]/i)) >= 0) add('video_tag', 'warning', 'Contém <video> dentro do clipe.', 'Importe o vídeo como clip separado na timeline (o export sincroniza vídeos só fora dos clipes HTML).', i);
     if ((i = at(/<audio[\s>]/i)) >= 0) add('audio_tag', 'warning', 'Contém <audio> dentro do clipe.', 'Use Motion.sfx ou um clip de áudio na timeline.', i);
+
+    // ── Estado que não volta no tempo ─────────────────────────
+    if ((i = find(/\bon(?:Start|Update|Complete|ReverseComplete|Repeat)\s*:/, js)) >= 0) {
+      add('timeline_callback_state', 'warning', 'Callbacks de timeline (onStart/onUpdate/onComplete) — o estado que eles mudam não volta ao recuar no tempo.',
+        'Calcule textos, classes e visibilidade a partir de t dentro de seek(t) (ex.: el.classList.toggle("on", t >= T.x)).', at(/\bon(?:Start|Update|Complete|ReverseComplete|Repeat)\s*:/));
+    }
+
+    // ── Kit MS (libs/motion-kit.js) ───────────────────────────
+    if (!/\b(?:const|let|var)\s+MS\s*=|\bwindow\.MS\s*=/.test(js)) {
+      const unknown = new Set();
+      const msRe = /\bMS\.([A-Za-z_$][\w$]*)/g;
+      let m;
+      while ((m = msRe.exec(js))) if (!MS_API.has(m[1])) unknown.add(m[1]);
+      unknown.forEach(name => add('ms_unknown_api', 'error', `MS.${name} não existe no kit do Motion Studio (é undefined e quebra o seek em todo quadro).`,
+        'Use só as funções documentadas de MS (seg, interpolate, ease.*, spring, random, rng, noise2D…) ou escreva o helper no próprio clipe.', at(new RegExp(`\\bMS\\.${name}\\b`))));
+      if ((i = find(/\bMS\.ease\s*\(/, js)) >= 0) {
+        add('ms_ease_call', 'error', 'MS.ease(...) chamado como função — MS.ease é um objeto de easings.', 'Use a função do easing: MS.ease.outCubic(u), ou passe-a em { easing: MS.ease.outCubic }.', at(/\bMS\.ease\s*\(/));
+      }
+    }
+
+    // ── Layout ────────────────────────────────────────────────
+    const markup = blankBlocks(src, 'script|style');
+    const seenIds = new Map();
+    const dupIds = new Set();
+    const idRe = /<[a-z][\w-]*\b[^>]*?\sid\s*=\s*["']([^"']+)["']/gi;
+    let idMatch;
+    while ((idMatch = idRe.exec(markup))) {
+      if (seenIds.has(idMatch[1]) && !dupIds.has(idMatch[1])) {
+        dupIds.add(idMatch[1]);
+        add('duplicate_id', 'warning', `id "${idMatch[1]}" repetido no documento (getElementById pega só o primeiro; sobra de outra cena?).`,
+          'Deixe cada id único; elementos repetidos usam classe. Remova o que sobrou de outra cena.', idMatch.index);
+      }
+      seenIds.set(idMatch[1], true);
+    }
+    const spread = cssBlocks(src).find(b => /justify-content\s*:\s*space-(?:between|around|evenly)/i.test(b.body) && /flex-direction\s*:\s*column/i.test(b.body));
+    if (spread) {
+      add('flex_column_spread', 'warning', 'Coluna flex com justify-content: space-between/around/evenly — espalha o conteúdo pela altura e cai sobre elementos posicionados.',
+        'Posicione cada bloco numa faixa com top/height explícitos, ou use justify-content: flex-start/center com gap fixo.', spread.index);
+    }
+
+    // ── Efeitos sonoros ───────────────────────────────────────
+    const sfxDecl = /(?:\bsfx\s*:|\.sfx\s*=)\s*\[([\s\S]*?)\]\s*[,;}\n]/.exec(js);
+    if (sfxDecl && (sfxDecl[1].match(/\bt\s*:\s*-?\d/g) || []).length >= 2) {
+      add('sfx_literal_times', 'warning', 'Motion.sfx com segundos escritos à mão — qualquer ajuste na animação dessincroniza os sons.',
+        'Declare os momentos-chave numa constante (const T = { titulo: 0.4, … }) usada pela animação e pelo sfx (t: T.titulo).', at(/(?:\bsfx\s*:|\.sfx\s*=)\s*\[/));
+    }
 
     // ── GSAP ──────────────────────────────────────────────────
     if ((i = find(/\bgsap\.(to|from|fromTo)\s*\(/, js)) >= 0) {

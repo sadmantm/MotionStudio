@@ -354,10 +354,12 @@
       const A = FX().style({ start: 0, duration: 0.4, tailFx: { type: id, duration: 0.9 } }, t);
       const B = FX().style({ start: 0.4, duration: 5, fx: { transition: { type: id, duration: 0.9 } } }, t);
       paint(a, A); paint(b, B);
+    } else if (kind === 'motion') {
+      // O clip cobre o loop inteiro: o movimento nunca some no meio da prévia
+      paint(solo, FX().style({ start: 0, duration: DEMO_LOOP.motion, fx: { motion: { type: id, strength: 1.4 } } }, t));
     } else {
-      const fx = kind === 'motion' ? { motion: { type: id, strength: 1.4 } } : { [kind]: { type: id, duration: 0.8 } };
       // Entrada: começa em 0; saída: termina no fim do loop
-      paint(solo, FX().style({ start: kind === 'out' ? -0.4 : 0.2, duration: 1.2, fx }, t));
+      paint(solo, FX().style({ start: kind === 'out' ? -0.4 : 0.2, duration: 1.2, fx: { [kind]: { type: id, duration: 0.8 } } }, t));
     }
   }
 

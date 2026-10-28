@@ -238,6 +238,25 @@ window.setClipAudio = function setClipAudio(clipId, field, value) {
   renderProjectSettings();
 };
 
+let _audioGestureGroup = null;
+
+/**
+ * Edição em grupo: o mesmo campo (ou { campo: valor, … }) em vários clips.
+ * live (slider) = um passo de undo por gesto.
+ */
+window.setClipsAudio = function setClipsAudio(ids, field, value, { live = false } = {}) {
+  const clips = ids.map(id => state.clips.find(c => c.id === id)).filter(Boolean);
+  if (!clips.length) return;
+  const fields = typeof field === 'object' ? field : { [field]: value };
+  const gesture = `${Object.keys(fields).join('+')}|${ids.join(',')}`;
+  if (_audioGestureGroup !== gesture) tlPushUndo();
+  _audioGestureGroup = live ? gesture : null;
+  clips.forEach(clip => Object.entries(fields).forEach(([f, v]) => applyAudioField(clip, f, v)));
+  if (live) return;
+  clips.forEach(clip => refreshClipBlock(clip.id));
+  renderProjectSettings();
+};
+
 function applyAudioField(clip, field, value) {
   if (field === 'volume' && !window.ClipKF?.handleVolumeInput(clip, clamp(Number(value) / 100, 0, 1))) clip.volume = clamp(Number(value) / 100, 0, 1);
   if (field === 'muted')   clip.muted   = Boolean(value);
